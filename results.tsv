@@ -8,3 +8,4 @@ e0931b1	27.20	75.3	51.5	se-dups;nq;msmarco	keep	exp-3 first clean baseline: SE+N
 e1724f2	0.00	0.0	0.0		crash	exp-9: fix OOM - reduce batch sizes (256→128 warmup/contrastive, 128→64 finetune); same proj_dim=768 + reddit
 d19b9dc	0.00	0.0	0.0		crash	exp-10: fix OOM - batch_size 64/64/32 (9GB/step); proj_dim=768 + reddit; baseline for larger batches
 4ad1e87	32.67	32.5	75.5	sentence-transformers/reddit-title-body;ms_marco;sentence-transformers/natural-questions;sentence-transformers/stackexchange-duplicates;glue	keep	exp-11: fix hard-neg mining OOM - reduce to 8K docs + batch_size=32; same proj_dim=768 + reddit + 64/64/32 batches
+64cea21	34.66	34.7	75.3	glue;sentence-transformers/stackexchange-duplicates;sentence-transformers/natural-questions;sentence-transformers/reddit-title-body;ms_marco;ag_news	keep	exp-12: add ag_news same-label pairs for clustering + finetune temp 0.02→0.05; target clustering(9%→15%)
