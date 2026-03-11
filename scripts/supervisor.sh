@@ -25,6 +25,9 @@ trap "kill $CAFFEINATE_PID 2>/dev/null" EXIT
 # Ensure PATH includes required tools
 export PATH="/Users/pierre/.local/bin:/opt/homebrew/bin:$PATH"
 
+# Force unbuffered Python output so run.log streams in real-time
+export PYTHONUNBUFFERED=1
+
 echo "[supervisor] Project: $PROJECT_DIR"
 echo "[supervisor] Logs: $LOG_DIR"
 echo "[supervisor] Max restarts: $MAX_RESTARTS"

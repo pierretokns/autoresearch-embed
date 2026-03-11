@@ -26,6 +26,10 @@ import yaml
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Force line-buffered stdout so run.log streams in real-time
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 # ---- Configuration ----
 
 DEFAULT_CONFIG = "configs/training_stages.yaml"

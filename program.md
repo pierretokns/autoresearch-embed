@@ -136,8 +136,9 @@ LOOP FOREVER:
 4. **Commit.** `git add src/ configs/ && git commit -m "experiment: <description>"`
    NEVER use `git add -A` or `git add .`. Always specify paths.
 
-5. **Train.** `uv run src/train.py --config configs/training_stages.yaml > run.log 2>&1`
+5. **Train.** `PYTHONUNBUFFERED=1 uv run src/train.py --config configs/training_stages.yaml > run.log 2>&1`
    Redirect everything — do NOT let output flood your context.
+   IMPORTANT: Always set PYTHONUNBUFFERED=1 so run.log streams in real-time for monitoring.
 
 6. **Handle crashes.** If training crashes:
    - Read `tail -50 run.log` to diagnose.
