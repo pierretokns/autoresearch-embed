@@ -201,6 +201,20 @@ Purpose: refine embedding space, push apart confusing near-misses.
 Total: ~55 minutes training + ~2 min quick eval + ~10 min full eval = ~67 min per experiment.
 Expect 20-25 complete experiments per 24 hours.
 
+## Performance optimization opportunities
+
+The following are known areas where training throughput can be improved.
+Explore these as experiments — each can yield 20-50% speedup:
+
+- **Mixed precision**: `torch.autocast("mps", dtype=torch.float16)` halves memory and ~doubles throughput on M2 Ultra.
+- **`torch.compile()`**: PyTorch 2.x graph compilation. Try `torch.compile(model, backend="aot_eager")` for MPS.
+- **Pre-tokenize once**: Tokenizing inside the training loop wastes CPU every epoch. Tokenize the full dataset once, store as tensors, use a DataLoader.
+- **Gradient accumulation**: Config has `gradient_accumulation_steps: 4` — use it to simulate larger effective batch sizes.
+- **`optimizer.zero_grad(set_to_none=True)`**: Faster than default.
+- **Chunked hard negative mining**: Full N×N similarity matrix at 50K samples = ~10GB. Use FAISS or chunked matmul.
+- **DataLoader with workers**: `num_workers=4` for prefetching batches while GPU trains.
+- **Cache device**: `next(self.parameters()).device` per batch in `encode()` is wasteful.
+
 ## Memory budget
 
 M2 Ultra: 64GB unified memory.
