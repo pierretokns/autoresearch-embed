@@ -67,15 +67,27 @@ def infonce_loss_with_hard_negs(
 
 
 # ---- Data Loading ----
+# Enable fast multi-connection HF downloads (Rust-based, ~5-10x faster)
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+def _cache_path(ds_id: str, config: str | None, fmt: str, max_rows: int) -> Path:
+    """Return path to cached triplets JSON for a dataset spec."""
+    import hashlib
+    key = f"{ds_id}|{config}|{fmt}|{max_rows}"
+    h = hashlib.sha256(key.encode()).hexdigest()[:12]
+    safe_name = ds_id.replace("/", "_")
+    return Path("data_cache") / f"{safe_name}_{h}.json"
+
 
 def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 50000) -> list[dict]:
-    """Load and combine multiple training datasets."""
+    """Load and combine multiple training datasets. Uses local JSON cache after first download."""
     try:
         from datasets import load_dataset
     except ImportError:
         print("datasets library not available")
         return []
 
+    Path("data_cache").mkdir(exist_ok=True)
     all_triplets = []
 
     for ds_spec in datasets_to_load:
@@ -83,7 +95,17 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
         config = ds_spec.get("config")
         fmt = ds_spec.get("format", "triplet")
         split = ds_spec.get("split", "train")
+
+        # Check local cache first
+        cache_file = _cache_path(ds_id, config, fmt, max_rows_per_dataset)
+        if cache_file.exists():
+            cached = json.loads(cache_file.read_text())
+            all_triplets.extend(cached)
+            print(f"  Loading {ds_id} ({fmt})... [cached] -> {len(all_triplets)} total pairs so far")
+            continue
+
         try:
+            count_before = len(all_triplets)
             print(f"  Loading {ds_id} ({fmt})...")
             if config:
                 ds = load_dataset(ds_id, config, split=f"{split}[:{max_rows_per_dataset}]")
@@ -161,7 +183,13 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     score = float(row[score_col]) if score_col else 1.0
                     if score >= 3.5:
                         all_triplets.append({"query": str(row[s1_col]), "positive": str(row[s2_col]), "source": ds_id})
-            print(f"    -> {len(all_triplets)} total pairs so far")
+            # Cache the new triplets for this dataset
+            new_triplets = all_triplets[count_before:]
+            if new_triplets:
+                cache_file.write_text(json.dumps(new_triplets))
+                print(f"    -> {len(all_triplets)} total pairs so far [cached to {cache_file.name}]")
+            else:
+                print(f"    -> {len(all_triplets)} total pairs so far")
         except Exception as e:
             print(f"    -> FAILED: {e}")
 
