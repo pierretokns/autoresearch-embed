@@ -1,1 +1,2 @@
 commit	primary_score	memory_gb	status	description
+d24b573	45.76	84.6	contaminated	baseline ModernBERT-base 4-stage; snli/mnli overlap with SICK-R(2.9%) and STSBench(3.0%)
