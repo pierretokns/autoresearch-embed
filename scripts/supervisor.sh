@@ -45,11 +45,12 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
     # --print: output only (no TUI)
     # --max-turns: prevent context exhaustion crash (clean exit instead)
     # --model: use sonnet for experiment planning (cheaper, fast)
-    cd "$PROJECT_DIR" && claude --print \
+    cd "$PROJECT_DIR" && claude \
+        --print \
         --model claude-sonnet-4-6 \
         --dangerously-skip-permissions \
-        --prompt "Read program.md and resume the experiment loop. Check results.tsv and git log --oneline -20 for current state. If uncommitted changes exist, git checkout . to clean up. Then continue experimenting." \
         --max-turns 200 \
+        "Read program.md and resume the experiment loop. Check results.tsv and git log --oneline -20 for current state. If uncommitted changes exist, git checkout . to clean up. Then continue experimenting." \
         2>&1 | tee "$log_file" || true
 
     restart_count=$((restart_count + 1))
