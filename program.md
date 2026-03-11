@@ -104,9 +104,14 @@ total_train_pairs: <string>
 
 **results.tsv** (tab-separated, one row per experiment):
 ```
-commit	primary_score	memory_gb	status	description
+commit	primary_score	memory_gb	training_min	datasets	status	description
 ```
 Status is one of: `keep`, `discard`, `crash`, `contaminated`.
+`datasets` is a semicolon-separated list of dataset IDs used (e.g. `se-dups;nq;msmarco`).
+
+**IMPORTANT:** After EVERY experiment (keep, discard, crash, or contaminated), also:
+- Archive the training log: `cp run.log logs/exp_<commit_short>.log`
+- Save training curves: `cp run.log` preserves per-step loss for paper figures later.
 
 **leaderboard.tsv** (tab-separated, one row per kept experiment with full MTEB):
 ```
@@ -304,6 +309,43 @@ checkpoint. This shows the progression of quality across tasks.
 
 When posting to agenthub, format scores as Markdown tables. Use consistent decimal
 precision (2 places for MTEB scores, 1 place for memory and time).
+
+## Reproducibility requirements
+
+- **Random seed**: Always set `random.seed(42)`, `np.random.seed(42)`,
+  `torch.manual_seed(42)` at the start of main(). Change seed only as an
+  explicit experiment variable.
+- **Dataset manifest**: Call `register_dataset()` from `src/data/registry.py` for
+  every dataset loaded. The manifest at `data_cache/manifest.json` must reflect
+  what was actually used, not hardcoded entries.
+- **Archive logs**: After each experiment, `cp run.log logs/exp_<commit>.log` so
+  training curves survive for figures.
+- **Tag milestones**: When primary_score exceeds a round number (30, 40, 50, etc),
+  create a git tag: `git tag v0.1-score30 && git push origin --tags`
+
+## Ablation discipline
+
+When you have a kept checkpoint that is the new best, run **systematic ablations**
+before exploring new directions. Change ONE variable at a time:
+
+1. Pooling: mean vs cls vs weighted-mean (3 runs)
+2. Projection dim: none vs 128 vs 256 vs 512 (4 runs)
+3. Temperature: 0.01 vs 0.02 vs 0.05 vs 0.1 (4 runs)
+4. Learning rate: 1e-5 vs 5e-5 vs 1e-4 vs 5e-4 (4 runs)
+5. Batch size: 32 vs 64 vs 128 vs 256 (4 runs)
+
+This produces a clean ablation table for the paper. Mark these in results.tsv
+description as `ablation: <variable>=<value>`.
+
+## Baseline comparisons
+
+Every ~10 experiments, also evaluate published models on our exact task set for
+comparison. Run these through the same MTEB eval code:
+- `sentence-transformers/all-MiniLM-L6-v2` (small baseline)
+- `BAAI/bge-base-en-v1.5` (strong baseline)
+- The base model with NO training (raw ModernBERT-base mean pooling)
+
+Log these in `baselines.tsv` with the same columns as leaderboard.tsv.
 
 ## Key research references
 

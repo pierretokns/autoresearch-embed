@@ -1,5 +1,5 @@
-commit	primary_score	memory_gb	status	description
-d24b573	45.76	84.6	contaminated	baseline ModernBERT-base 4-stage; snli/mnli overlap with SICK-R(2.9%) and STSBench(3.0%)
-a3fa28a	43.34	71.3	contaminated	remove snli/mnli but all-nli still has Flickr overlap SICK-R(2.0%) STSBench(1.9%)
-e0931b1	27.20	75.3	keep	exp-3 first clean baseline: SE+NQ+MSMARCO, contamination PASS (0% all tasks)
-892d982	33.80	79.5	contaminated	MRPC news text overlaps STSBenchmark (2.95%)
+commit	primary_score	memory_gb	training_min	datasets	status	description
+d24b573	45.76	84.6	51.5	snli;mnli;all-nli	contaminated	baseline ModernBERT-base 4-stage; snli/mnli overlap with SICK-R(2.9%) and STSBench(3.0%)
+a3fa28a	43.34	71.3	51.5	all-nli;quora;msmarco	contaminated	remove snli/mnli but all-nli still has Flickr overlap SICK-R(2.0%) STSBench(1.9%)
+e0931b1	27.20	75.3	51.5	se-dups;nq;msmarco	keep	exp-3 first clean baseline: SE+NQ+MSMARCO, contamination PASS (0% all tasks)
+892d982	33.80	79.5	51.5	mrpc;qqp;mnli-nonpic	contaminated	MRPC news text overlaps STSBenchmark (2.95%)
