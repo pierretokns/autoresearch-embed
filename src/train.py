@@ -9,6 +9,7 @@ batch size, model size — everything is fair game.
 """
 
 import hashlib
+import itertools
 import json
 import os
 import random
@@ -107,7 +108,16 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
         try:
             count_before = len(all_triplets)
             print(f"  Loading {ds_id} ({fmt})...")
-            if config:
+            # Use streaming for large datasets to avoid downloading/processing GBs
+            # we don't need. Streaming grabs rows on-the-fly.
+            use_streaming = ds_spec.get("streaming", False)
+            if use_streaming:
+                if config:
+                    ds_iter = load_dataset(ds_id, config, split=split, streaming=True)
+                else:
+                    ds_iter = load_dataset(ds_id, split=split, streaming=True)
+                ds = list(itertools.islice(ds_iter, max_rows_per_dataset))
+            elif config:
                 ds = load_dataset(ds_id, config, split=f"{split}[:{max_rows_per_dataset}]")
             else:
                 ds = load_dataset(ds_id, split=f"{split}[:{max_rows_per_dataset}]")
@@ -437,7 +447,7 @@ DATASETS = [
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
     # Reddit title-body pairs: high topic diversity → better clustering signal
-    {"id": "sentence-transformers/reddit-title-body", "config": None, "format": "reddit_title_body"},
+    {"id": "sentence-transformers/reddit-title-body", "config": None, "format": "reddit_title_body", "streaming": True},
 ]
 
 
