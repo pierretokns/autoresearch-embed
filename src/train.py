@@ -74,7 +74,7 @@ class EmbeddingModel(torch.nn.Module):
         return pooled
 
     def encode(self, sentences, tokenizer, batch_size=64, max_length=512):
-        """MTEB-compatible encode method."""
+        """MTEB-compatible encode method. Keeps embeddings on device until final conversion."""
         all_embs = []
         self.eval()
         # Cache device once to avoid per-batch next(self.parameters()).device overhead
@@ -86,9 +86,11 @@ class EmbeddingModel(torch.nn.Module):
                                 max_length=max_length, return_tensors="pt")
                 enc = {k: v.to(_device) for k, v in enc.items()}
                 emb = self.forward(enc["input_ids"], enc["attention_mask"])
-                # float() before cpu() — MPS may produce float16 under autocast
-                all_embs.append(emb.float().cpu().numpy())
-        return np.concatenate(all_embs, axis=0)
+                # Keep on device — only convert to numpy at the end
+                all_embs.append(emb.float())
+        # Concatenate on device, then single copy to CPU + numpy
+        concatenated = torch.cat(all_embs, dim=0)
+        return concatenated.cpu().numpy()
 
 
 def infonce_loss(query_emb, positive_emb, temperature=0.05):
@@ -548,17 +550,33 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {num_params / 1e6:.1f}M")
 
-    # Load training data
-    print("Loading training data...")
-    triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
-    print(f"Total training pairs (pre-decontam): {len(triplets)}")
+    # Load training data with decontamination caching
+    # Cache key: hash of dataset config. Invalidates when DATASETS list changes.
+    import hashlib
+    ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
+    cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Decontaminate: remove any training samples that overlap with MTEB test sets
-    print("Building MTEB test LSH for decontamination...")
-    from src.data.decontaminate import build_test_lsh, filter_triplets, DECONTAM_TASKS
-    test_lsh = build_test_lsh(DECONTAM_TASKS)
-    triplets, removed = filter_triplets(triplets, test_lsh)
-    print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
+    if cache_path.exists():
+        print(f"Loading cached clean triplets from {cache_path}...")
+        triplets = json.loads(cache_path.read_text())
+        removed = 0  # already decontaminated
+        print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
+    else:
+        print("Loading training data...")
+        triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
+        print(f"Total training pairs (pre-decontam): {len(triplets)}")
+
+        # Decontaminate: remove any training samples that overlap with MTEB test sets
+        print("Building MTEB test LSH for decontamination...")
+        from src.data.decontaminate import build_test_lsh, filter_triplets, DECONTAM_TASKS
+        test_lsh = build_test_lsh(DECONTAM_TASKS)
+        triplets, removed = filter_triplets(triplets, test_lsh)
+        print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
+
+        # Cache for future runs
+        cache_path.write_text(json.dumps(triplets))
+        print(f"Cached clean triplets to {cache_path}")
 
     if not triplets:
         print("WARNING: No training data loaded. Using scaffold baseline.")
