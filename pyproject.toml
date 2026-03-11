@@ -1,0 +1,19 @@
+[project]
+name = "autoresearch-embed"
+version = "0.1.0"
+description = "Autonomous embedding model research on Apple Silicon (MLX)"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx>=0.30.0",
+    "numpy>=2.2.0",
+    "sentence-transformers>=3.0.0",
+    "mteb>=1.20.0",
+    "datasets>=3.0.0",
+    "huggingface-hub>=0.25.0",
+    "transformers>=4.45.0",
+    "tokenizers>=0.20.0",
+    "safetensors>=0.4.0",
+    "pyyaml>=6.0",
+    "datasketch>=1.6.0",
+    "anthropic>=0.40.0",
+]

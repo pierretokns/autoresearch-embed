@@ -1,0 +1,61 @@
+# Multi-stage contrastive training configuration
+# All durations are wall-clock minutes
+
+base_model: "answerdotai/ModernBERT-base"
+embedding_dim: 768
+projection_dim: 256
+pooling: "mean"  # mean, cls, weighted
+max_seq_length: 512
+normalize_embeddings: true
+
+stages:
+  warmup:
+    duration_minutes: 10
+    data: "nli_entailment_only"
+    loss: "infonce"
+    temperature: 0.1
+    learning_rate: 1.0e-4
+    lr_schedule: "linear_warmup_constant"
+    warmup_ratio: 0.1
+    batch_size: 256
+    negatives: "in_batch_only"
+    freeze_encoder_layers: 0  # freeze first N layers
+
+  contrastive:
+    duration_minutes: 20
+    data: "all_curated"
+    loss: "infonce"
+    temperature: 0.05
+    learning_rate: 5.0e-5
+    lr_schedule: "cosine_decay"
+    warmup_ratio: 0.05
+    batch_size: 256
+    negatives: "in_batch_plus_explicit"
+    source_stratification: true  # fill batches from single source
+
+  hard_neg_mining:
+    duration_minutes: 5
+    top_k: 7
+    batch_size: 512  # inference only, can be larger
+    min_similarity: 0.3  # ignore very dissimilar passages
+
+  fine_tuning:
+    duration_minutes: 20
+    data: "all_curated_with_hard_negs"
+    loss: "infonce"
+    temperature: 0.02
+    learning_rate: 1.0e-5
+    lr_schedule: "cosine_decay"
+    warmup_ratio: 0.0
+    batch_size: 128
+    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs
+
+optimizer:
+  type: "adamw"
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+  weight_decay: 0.01
+
+memory:
+  max_peak_gb: 55
+  gradient_accumulation_steps: 4
