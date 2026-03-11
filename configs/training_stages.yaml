@@ -17,7 +17,7 @@ stages:
     learning_rate: 1.0e-4
     lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
-    batch_size: 256
+    batch_size: 128
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
 
@@ -29,14 +29,14 @@ stages:
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 256
+    batch_size: 128
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
 
   hard_neg_mining:
     duration_minutes: 5
     top_k: 7
-    batch_size: 512  # inference only, can be larger
+    batch_size: 256  # inference only, can be larger
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
@@ -47,7 +47,7 @@ stages:
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 128
+    batch_size: 64
     hard_neg_weight: 2.0  # weight hard negs vs in-batch negs
 
 optimizer:
