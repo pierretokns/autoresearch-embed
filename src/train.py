@@ -145,6 +145,13 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     if neg_col and row.get(neg_col):
                         t["negatives"] = [str(row[neg_col])]
                     all_triplets.append(t)
+            elif fmt == "reddit_title_body":
+                # Reddit title (query) → post body (positive): diverse topic pairs
+                for row in ds:
+                    title = row.get("title", "")
+                    body = row.get("body", row.get("selftext", ""))
+                    if title and body and len(body) > 50:
+                        all_triplets.append({"query": title, "positive": body[:400], "source": ds_id})
             elif fmt == "pair_score":
                 cols = ds.column_names
                 s1_col = next((c for c in cols if c in ("sentence1", "text1", "anchor")), cols[0])
@@ -401,6 +408,8 @@ DATASETS = [
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
+    # Reddit title-body pairs: high topic diversity → better clustering signal
+    {"id": "sentence-transformers/reddit-title-body", "config": None, "format": "reddit_title_body"},
 ]
 
 
@@ -484,7 +493,7 @@ def main():
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "")]
+    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
     if not warmup_data:
         warmup_data = triplets
 
