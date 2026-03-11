@@ -77,14 +77,17 @@ class EmbeddingModel(torch.nn.Module):
         """MTEB-compatible encode method."""
         all_embs = []
         self.eval()
+        # Cache device once to avoid per-batch next(self.parameters()).device overhead
+        _device = next(self.parameters()).device
         with torch.no_grad():
             for i in range(0, len(sentences), batch_size):
                 batch = sentences[i:i+batch_size]
                 enc = tokenizer(batch, padding=True, truncation=True,
                                 max_length=max_length, return_tensors="pt")
-                enc = {k: v.to(next(self.parameters()).device) for k, v in enc.items()}
+                enc = {k: v.to(_device) for k, v in enc.items()}
                 emb = self.forward(enc["input_ids"], enc["attention_mask"])
-                all_embs.append(emb.cpu().numpy())
+                # float() before cpu() — MPS may produce float16 under autocast
+                all_embs.append(emb.float().cpu().numpy())
         return np.concatenate(all_embs, axis=0)
 
 
@@ -111,7 +114,14 @@ def infonce_loss_with_hard_negs(query_emb, positive_emb, hard_neg_emb, temperatu
 # ---- Data Loading ----
 
 def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 50000) -> list[dict]:
-    """Load and combine multiple training datasets."""
+    """Load and combine multiple training datasets.
+
+    NOTE: Pre-tokenization optimization opportunity — tokenize all texts once
+    during loading and cache as tensors, avoiding repeated tokenizer calls in
+    the training loop. This is a bigger refactor (requires changing the data
+    format from dicts of strings to pre-tokenized batches) — TODO for a future
+    experiment.
+    """
     from transformers import AutoTokenizer
     try:
         from datasets import load_dataset
@@ -256,23 +266,27 @@ def run_training_stage(
             q_enc = tokenizer(queries, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
             p_enc = tokenizer(positives, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
 
-            q_emb = model(q_enc["input_ids"], q_enc["attention_mask"])
-            p_emb = model(p_enc["input_ids"], p_enc["attention_mask"])
+            # Mixed precision: autocast forward+loss to float16
+            # Halves memory and roughly doubles throughput. No GradScaler
+            # needed — MPS autocast works without one.
+            with torch.autocast(device.type, dtype=torch.float16, enabled=(device.type in ("mps", "cuda"))):
+                q_emb = model(q_enc["input_ids"], q_enc["attention_mask"])
+                p_emb = model(p_enc["input_ids"], p_enc["attention_mask"])
 
-            # Check for hard negatives
-            has_hard_negs = any(t.get("negatives") for t in batch)
-            if has_hard_negs and hard_neg_weight > 1.0:
-                negs_text = []
-                for t in batch:
-                    negs = t.get("negatives", [])
-                    negs_text.append(negs[0][:500] if negs else t["positive"][:500])
-                n_enc = tokenizer(negs_text, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
-                n_emb = model(n_enc["input_ids"], n_enc["attention_mask"])
-                loss = infonce_loss_with_hard_negs(q_emb, p_emb, n_emb, temperature=temperature, hard_neg_weight=hard_neg_weight)
-            else:
-                loss = infonce_loss(q_emb, p_emb, temperature=temperature)
+                # Check for hard negatives
+                has_hard_negs = any(t.get("negatives") for t in batch)
+                if has_hard_negs and hard_neg_weight > 1.0:
+                    negs_text = []
+                    for t in batch:
+                        negs = t.get("negatives", [])
+                        negs_text.append(negs[0][:500] if negs else t["positive"][:500])
+                    n_enc = tokenizer(negs_text, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
+                    n_emb = model(n_enc["input_ids"], n_enc["attention_mask"])
+                    loss = infonce_loss_with_hard_negs(q_emb, p_emb, n_emb, temperature=temperature, hard_neg_weight=hard_neg_weight)
+                else:
+                    loss = infonce_loss(q_emb, p_emb, temperature=temperature)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -284,12 +298,24 @@ def run_training_stage(
                 elapsed = time.time() - stage_start
                 avg_loss = total_loss / step
                 print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s")
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        wandb.log({"loss": loss.item(), "avg_loss": avg_loss, "step": step, "stage": stage_name})
+                except Exception:
+                    pass
 
         random.shuffle(data)
 
     stage_time = time.time() - stage_start
     avg_loss = total_loss / max(step, 1)
     print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s")
+
+    # Free MPS memory after each training stage completes
+    if hasattr(torch.mps, 'empty_cache'):
+        torch.mps.empty_cache()
+    gc.collect()
+
     return step
 
 
@@ -323,6 +349,9 @@ def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: i
     query_texts = [t["query"][:400] for t in triplets]
     mined = list(triplets)
 
+    # TODO: For larger corpora (>100K), replace brute-force matmul with FAISS
+    # approximate nearest neighbor search for sub-linear mining time.
+    # Process queries in chunks with memory cleanup between chunks.
     with torch.no_grad():
         for i in range(0, len(query_texts), batch_size):
             batch_q = query_texts[i:i+batch_size]
@@ -347,6 +376,9 @@ def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: i
                 if hard_negs:
                     mined[idx] = dict(mined[idx])
                     mined[idx]["negatives"] = hard_negs
+
+            # Cleanup between chunks to keep memory bounded
+            del q_emb, sims
 
     neg_count = sum(1 for t in mined if t.get("negatives"))
     print(f"  Mined hard negatives for {neg_count}/{len(mined)} triplets")
@@ -466,8 +498,26 @@ def main():
     parser.add_argument("--quick-eval-only", action="store_true")
     args = parser.parse_args()
 
+    # Reproducibility seeds
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+
     config = load_config(args.config)
     total_start = time.time()
+
+    # Initialize wandb (best-effort — wrapper has fallback)
+    experiment_desc = os.environ.get("EXPERIMENT_DESC", "unnamed")
+    _wandb_run = None
+    try:
+        import wandb
+        _wandb_run = wandb.init(
+            project="autoresearch-embed", entity="gourmand-labs",
+            name=experiment_desc, config=config,
+        )
+    except Exception as e:
+        print(f"wandb init failed (non-fatal): {e}")
+        wandb = None
 
     # Device
     if torch.backends.mps.is_available():
@@ -606,6 +656,11 @@ def main():
         import traceback; traceback.print_exc()
         scores = {}
 
+    # Free MPS memory after evaluation completes
+    if hasattr(torch.mps, 'empty_cache'):
+        torch.mps.empty_cache()
+    gc.collect()
+
     # Compute category averages
     sts_scores = [scores.get("STSBenchmark", 0), scores.get("SICK-R", 0)]
     sts_avg = np.mean([s for s in sts_scores if s > 0]) if any(s > 0 for s in sts_scores) else 0.0
@@ -629,6 +684,63 @@ def main():
 
     total_time = time.time() - total_start
 
+    # === DO NOT REMOVE: result.json output required by experiment.py ===
+    result_data = {
+        "primary_score": round(primary, 4),
+        "sts_avg": round(sts_avg, 4),
+        "pair_class_avg": round(pair_avg, 4),
+        "cluster_avg": round(cluster_avg, 4),
+        "retrieval_avg": round(retrieval_avg, 4),
+        "training_minutes": round(train_time / 60, 1),
+        "peak_memory_gb": round(peak_mem, 1),
+        "num_params_M": round(num_params / 1e6, 1),
+        "base_model": model_name,
+        "training_stage": "full_4stage",
+        "total_train_pairs": len(triplets),
+        "task_scores": {k: round(v, 2) for k, v in scores.items()},
+        "config": config,
+        "datasets": list({t.get("source", "unknown") for t in triplets}),
+        "decontam_removed": removed,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if _wandb_run is not None:
+        result_data["wandb_run_id"] = _wandb_run.id
+
+    # Write result.json to project root
+    with open("result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
+    # Also write to checkpoint dir
+    with open(ckpt_dir / "result.json", "w") as f:
+        json.dump(result_data, f, indent=2)
+
+    # Register datasets in manifest
+    manifest_path = Path("data_cache/manifest.jsonl")
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    for ds_spec in DATASETS:
+        manifest_entry = {
+            "id": ds_spec.get("id"),
+            "config": ds_spec.get("config"),
+            "format": ds_spec.get("format"),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        with open(manifest_path, "a") as f:
+            f.write(json.dumps(manifest_entry) + "\n")
+
+    # Log final scores to wandb
+    try:
+        import wandb
+        if wandb.run is not None:
+            wandb.log({"primary_score": primary, "sts_avg": sts_avg,
+                        "pair_class_avg": pair_avg, "cluster_avg": cluster_avg,
+                        "retrieval_avg": retrieval_avg})
+            for task, score in scores.items():
+                wandb.log({f"mteb/{task}": score})
+            wandb.finish()
+    except Exception as e:
+        print(f"wandb finish failed (non-fatal): {e}")
+    # === END result.json output ===
+
+    # Human-readable summary (also parsed by experiment.py fallback)
     print("\n---")
     print(f"primary_score:     {primary:.4f}")
     print(f"sts_avg:           {sts_avg:.4f}")
