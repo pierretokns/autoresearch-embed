@@ -2,17 +2,28 @@
 
 Autonomous embedding model research on Apple Silicon. Train, evaluate, and iterate on text embedding models using contrastive learning, with MTEB as the ground-truth benchmark.
 
+**Goal**: Build an embedding model that achieves SOTA or near-SOTA results for its parameter class, or discovers a novel technique worth publishing. Our base (ModernBERT-base, 149M params) is already SOTA for encoder-only NLU (GLUE 88.4) and code retrieval (CoIR 79.31) — we need to unlock that potential for general embeddings.
+
 ## Your Workflow
 
 1. **Read state**: `cat results.jsonl | python3 -c "import sys,json; [print(json.loads(l)['status'], json.loads(l)['primary_score'], json.loads(l)['description']) for l in sys.stdin]"`
    Or: `git log --oneline -20`
-2. **Decide what to try** (see Research Strategy below)
+2. **Decide what to try** (see Research Directions below)
 3. **Edit code** in `src/` or `configs/`
 4. **Run**: `uv run scripts/experiment.py "description of what you changed"`
 5. **Read the output summary**. Think about what worked and what to try next.
 6. GOTO 1
 
-That's it. The script handles git, training, eval, contamination checks, results logging, wandb, agenthub posting, and git push. You just research.
+The script handles git, training, eval, contamination checks, results logging, wandb, agenthub posting, and git push. You just research.
+
+## Experiment Time Budget
+
+**Target: 5 minutes per experiment** (Karpathy autoresearch principle). Fast iteration beats long training. Use short stage durations (2+3+2 min) for exploration, longer runs (15+30+30 min) only for final validation of promising configs. The agent that runs 50 short experiments learns more than the one that runs 3 long ones.
+
+Tune these to hit the 5-min target:
+- Max seq length: 256 for exploration, 512 for validation runs
+- Batch size: whatever fits in memory (64-128 for MLX on M2 Ultra)
+- Stage durations: warmup 2min, contrastive 3min, finetune 2min (exploration mode)
 
 ## What You Can Modify
 
@@ -36,6 +47,7 @@ Training uses MLX natively — no PyTorch, no MPS. Key patterns:
 - `encode_sentences()` returns numpy for MTEB compatibility
 - No `.to(device)`, no `autocast`, no `empty_cache` — MLX handles memory automatically
 - Decontaminated data cached in `data_cache/` keyed by dataset config hash
+- Use `mx.fast.scaled_dot_product_attention()` for efficient attention
 
 ## Metrics
 
@@ -50,21 +62,98 @@ primary = 0.3 * mean(STS) + 0.2 * mean(PairClassification) + 0.2 * mean(Clusteri
 - Clustering: TwentyNewsgroupsClustering, RedditClustering
 - Retrieval: SciFact, NFCorpus
 
-**Quick eval**: STSBenchmark, SICK-R, TwitterURLCorpus (~2 min). **Full eval**: all 8 (~10 min).
+**Quick eval** (use for 5-min experiments): STSBenchmark, SICK-R, TwitterURLCorpus (~2 min).
+**Full eval** (use for validation): all 8 (~10 min).
 
-## Research Strategy
+## Research Directions (Priority Order)
 
-Priority order — pick ONE change per experiment:
+Pick ONE change per experiment. These are ordered by expected impact for our setup:
 
-a. **Data**: new datasets, sampling ratios, synthetic data, decontamination. Upload cleaned datasets to HF under `pierretokns`.
-b. **Loss**: InfoNCE temperature, hard negative weight, margin loss.
-c. **Schedule**: stage durations, learning rates, warmup/cooldown ratios.
-d. **Architecture**: pooling (CLS vs mean vs weighted), projection dim, layer selection, freezing early layers.
-e. **Hard negatives**: mining top-k, mining frequency, filtering threshold.
-f. **Synthetic data**: generate for domains where scores are weakest.
-g. **Base model**: try different encoders (Qwen3-0.6B, ModernBERT, etc.).
+### Tier 1: High-Impact Architecture Changes
 
-**Ablation discipline**: when you have a new best, run systematic ablations before exploring new directions. Change ONE variable at a time (pooling, projection dim, temperature, LR, batch size). Mark these in results as `ablation: <variable>=<value>`.
+a. **Advanced Pooling** (biggest potential win):
+   - **Latent Attention Pooling**: Replace mean pooling with a cross-attention layer over a trainable dictionary. A small number of learned query vectors attend over all token representations. This captures richer structure than mean/CLS pooling. See NV-Embed-v2 (MTEB #1, score 72.31).
+   - **Multi-Layer Trainable Pooling**: Use weighted combination of hidden states from ALL encoder layers, not just the final one. Each layer captures different granularity — early layers have syntax, late layers have semantics. Learn the weights. Research shows middle layers of encoders often capture MORE semantic information than the last layer (0.08 gap on STS for Mistral-7B). Use a trainable cross-attention network over layer hidden states.
+   - **Weighted Mean Pooling**: Learn per-token or per-layer importance weights instead of uniform averaging.
+
+b. **Matryoshka Representation Learning (MRL)**:
+   - Train embeddings that work at multiple dimensionalities simultaneously (768, 512, 256, 128, 64).
+   - Apply the contrastive loss at each truncated dimension during training.
+   - Enables efficient retrieval at lower dims without quality collapse. See EmbeddingGemma.
+   - Advanced: implement SMEC for progressive dimension reduction with minimal information loss.
+   - Scaling law insight: it's more effective to use a larger model with smaller embedding dim than a smaller model with larger dim. Under fixed compute, increase both model size and dim proportionally.
+   - Combined with int8 quantization: 768-dim float32 (3KB) → 256-dim int8 (256 bytes) = 12x storage reduction.
+
+c. **Attention Strategy & Efficiency**:
+   - ModernBERT already has bidirectional attention (crucial for STS and retrieval — outperforms causal attention on these tasks). This is our advantage over decoder-based models that need special adaptation for bidirectional.
+   - However, causal attention can be superior for clustering and classification. Consider a hybrid: bidirectional for retrieval/STS heads, causal for classification/clustering.
+   - Experiment with the local/global attention ratio in ModernBERT.
+   - Implement unpadding (remove padding tokens from attention computation) for throughput.
+   - Use `mx.fast.scaled_dot_product_attention()` for efficient attention.
+
+### Tier 2: Training Methodology
+
+d. **Teacher-Guided Hard Negative Mining**:
+   - Use a larger model (or the current best checkpoint) as a teacher/reranker to score negatives.
+   - Apply a margin to filter out "false negatives" — pairs labeled as negative but actually semantically similar. This is the #1 cause of training signal degradation.
+   - See Arctic-Embed methodology: tunable similarity threshold for negative filtering.
+
+e. **Distillation from Rerankers (zELO approach)**:
+   - Instead of binary relevant/not-relevant labels, distill continuous Elo scores (0 to 1) from pairwise document "battles" scored by a reranker.
+   - Train with soft labels using KL divergence or MSE loss alongside contrastive loss.
+   - zembed-1 (4B, SOTA retrieval) uses this — distills from zerank-2 reranker, outperforms OpenAI Large by +7% Recall@100.
+   - We can approximate this without a reranker: use our best checkpoint as a teacher to score pairs, generating soft relevance labels for the next training round (self-distillation).
+
+f. **Instruction-Tuning for Embeddings**:
+   - Prepend task-specific instructions to queries (e.g., "Retrieve similar questions:", "Classify this text:").
+   - Train with diverse task prefixes to improve zero-shot generalization.
+   - See bge-en-icl (MTEB #3, score 71.67), E5-Mistral approach.
+
+g. **Loss Functions**:
+   - InfoNCE temperature sweep (0.01 to 0.2) — this has outsized impact.
+   - Hard negative weighting: upweight loss contribution of hard negatives.
+   - Cosine similarity loss for STS tasks alongside contrastive loss (multi-task).
+   - Triplet loss with adaptive margin as alternative to InfoNCE.
+
+### Tier 3: Data Strategy
+
+h. **Data Quality over Quantity**:
+   - Source stratification: balance data across STS, classification, clustering, retrieval domains.
+   - LLM-labeled data: use Claude/GPT to generate high-quality pairs for weak categories (clustering, retrieval).
+   - Positive-aware sampling: ensure in-batch negatives don't accidentally contain true positives.
+   - Upload all cleaned datasets to HF under `pierretokns`.
+
+i. **Synthetic Data for Weak Categories**:
+   - Generate clustering-oriented data: topic-labeled documents from diverse domains.
+   - Generate retrieval pairs: question-passage pairs for scientific and biomedical domains (SciFact, NFCorpus weaknesses).
+   - Use source diversity: Reddit, StackExchange, Wikipedia, arXiv, PubMed.
+
+j. **Base Model Exploration**:
+   - ModernBERT-base (current, 149M) — strong baseline, SOTA for code and NLU.
+   - ModernBERT-large (395M) — if memory allows.
+   - Consider decoder-based backbones if time permits (top MTEB models all use Mistral/Llama).
+
+### Tier 4: Novel / Experimental
+
+k. **Diffusion-Based Pretraining**: Convert the encoder backbone using diffusion noise objectives before contrastive fine-tuning. See pplx-embed approach (MTEB multilingual #1).
+
+l. **Contextual Embeddings**: Train context-dependent representations where the embedding of a passage changes based on surrounding context. See pplx-embed-context-v1-4B (ConTEB SOTA, 81.96 nDCG@10).
+
+m. **Progressive Dimension Training**: Start training at low dimension (64), progressively increase to full dimension (768). Curriculum learning for representation quality.
+
+**Ablation discipline**: when you have a new best, run systematic ablations before exploring new directions. Change ONE variable at a time. Mark these in results as `ablation: <variable>=<value>`.
+
+## SOTA Context (What We're Competing Against)
+
+| Model | Params | MTEB Eng Avg | Notes |
+|-------|--------|-------------|-------|
+| NV-Embed-v2 | 7B | 72.31 | #1 overall, latent attention pooling |
+| bge-en-icl | 7B | 71.67 | Instruction-tuned, in-context learning |
+| stella_en_1.5B_v5 | 1.5B | ~71 | Mistral-based |
+| gte-modernbert-base | 149M | ~65* | Same backbone as ours, code SOTA |
+| Our current best | 149M | 27.20 | Clean baseline, huge room to improve |
+
+At 149M params, gte-modernbert-base (~65 MTEB avg) is our direct competitor. Closing the gap from 27 → 65 requires better pooling, better training, and better data — not more parameters.
 
 ## Anti-Cheat Rules
 
@@ -72,21 +161,19 @@ g. **Base model**: try different encoders (Qwen3-0.6B, ModernBERT, etc.).
 - Contamination check must pass (<1% per task) before any result counts.
 - Training code must never import from eval; eval must never import from data.
 - Document every data source in `src/data/registry.py` with URL, date, count, and hash.
+- Evaluate on out-of-domain tasks periodically to ensure generalization.
 
 ## Key Research References
 
-- **pplx-embed** (Perplexity): Diffusion-continued pretraining + multi-stage contrastive. arXiv 2602.11151
+- **NV-Embed-v2**: #1 MTEB English. Latent attention pooling, instruction-tuning. Key insight: pooling strategy matters more than model size.
+- **pplx-embed** (Perplexity): Diffusion pretraining + multi-stage contrastive. #1 MTEB Multilingual. arXiv 2602.11151
+- **gte-modernbert-base**: Same ModernBERT backbone, ~65 MTEB avg. Code retrieval SOTA. Our direct competitor to study and beat.
 - **jxmo blog**: LLM-labeled data to avoid false negative poisoning. https://blog.jxmo.io/p/how-to-train-the-best-embedding-model
 - **Arctic-Embed** (Snowflake): Source stratification, hard negative mining with tunable threshold.
-- **EmbeddingGemma**: Best sub-500M on MTEB, Matryoshka representations.
-
-## Resumption
-
-On new session: read `results.jsonl` and `git log --oneline -20`. If uncommitted changes exist, `git checkout .`. Jump into the loop. Do not re-read this file or re-run setup — go straight to research.
-
-## NEVER STOP
-
-Run the experiment loop until interrupted. If out of ideas: re-read the references above, combine two near-winners, try radical architecture changes, generate synthetic data for your weakest category, or search HF Hub / Kaggle for new datasets. There is always something to try.
+- **EmbeddingGemma**: Matryoshka representations, best sub-500M on MTEB.
+- **zembed-1**: zELO distillation — continuous relevance scores from rerankers.
+- **jina-embeddings-v3**: RoPE for long context, multilingual SOTA.
+- **dewey_en_beta**: 128k context, open-source long-context leader.
 
 ## Stage Checkpoints & Resume
 
@@ -96,7 +183,15 @@ Training saves checkpoints after each stage (`checkpoints/stages/after_*.npz`). 
 uv run scripts/experiment.py "description" --resume-stage mining
 ```
 
-Valid stages: `contrastive`, `mining`, `finetune`, `eval`. This loads the checkpoint from the prior stage and continues. Use this to avoid wasting 45+ min re-doing warmup+contrastive when only mining or finetune crashed.
+Valid stages: `contrastive`, `mining`, `finetune`, `eval`. This loads the checkpoint from the prior stage and continues.
+
+## Resumption
+
+On new session: read `results.jsonl` and `git log --oneline -20`. If uncommitted changes exist, `git checkout .`. Jump into the loop. Do not re-read this file or re-run setup — go straight to research.
+
+## NEVER STOP
+
+Run the experiment loop until interrupted. If out of ideas: re-read the references above, combine two near-winners, try radical architecture changes, generate synthetic data for your weakest category, or search HF Hub / Kaggle for new datasets. There is always something to try.
 
 ## Memory Budget
 
