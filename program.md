@@ -123,6 +123,9 @@ LOOP FOREVER:
 2. **Decide what to try.** Pick ONE change per experiment. Priority order:
    a. No baseline yet → run default config, establish baseline.
    b. Data: add a new dataset, change sampling ratios, add synthetic data.
+      If a dataset was flagged contaminated, consider **deduplicating** it instead
+      of dropping it entirely — build a MinHash filter in `src/data/` (NOT importing
+      from `src/eval/`) to remove only the overlapping samples and keep the rest.
    c. Loss: change InfoNCE temperature, hard negative weight, try margin loss.
    d. Schedule: change stage durations, learning rates, warmup/cooldown ratios.
    e. Architecture: change pooling (CLS vs mean vs weighted), projection dim,
