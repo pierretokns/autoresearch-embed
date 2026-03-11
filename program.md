@@ -126,6 +126,9 @@ LOOP FOREVER:
       If a dataset was flagged contaminated, consider **deduplicating** it instead
       of dropping it entirely — build a MinHash filter in `src/data/` (NOT importing
       from `src/eval/`) to remove only the overlapping samples and keep the rest.
+      Upload cleaned datasets to HuggingFace (`huggingface-cli upload` or the
+      `datasets` library `push_to_hub`) under the `pierretokns` org so they're
+      reusable across experiments. Name them clearly, e.g. `pierretokns/snli-decontaminated-mteb`.
    c. Loss: change InfoNCE temperature, hard negative weight, try margin loss.
    d. Schedule: change stage durations, learning rates, warmup/cooldown ratios.
    e. Architecture: change pooling (CLS vs mean vs weighted), projection dim,
