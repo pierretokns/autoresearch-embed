@@ -444,16 +444,17 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
-    # MRPC: Microsoft Research Paraphrase Corpus — news sentences (no Flickr)
+    # all-nli triplets: DECONTAMINATED via MinHash filter before use
+    {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
+    # MRPC paraphrases: DECONTAMINATED (news overlap with STSBenchmark)
     {"id": "glue", "config": "mrpc", "format": "glue_mrpc"},
-    # QQP: Quora Question Pairs — duplicate questions only
+    # QQP: Quora Question Pairs — duplicate questions (clean, no STS overlap)
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
-    # MultiNLI non-picture genres: government, fiction, telephone, travel, slate, 9/11
-    # These genres don't use Flickr captions → no SICK-R/STSBench overlap
+    # MultiNLI non-picture genres: government, fiction, telephone, travel
     {"id": "multi_nli", "config": None, "format": "mnli_nonpicture"},
-    # StackExchange title pairs: Q&A forum duplicates (no STS overlap)
+    # StackExchange title pairs: Q&A forum duplicates (clean)
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
-    # MS MARCO passages: retrieval pairs, diverse web domain
+    # MS MARCO passages: retrieval pairs (clean)
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
 ]
 
@@ -500,7 +501,14 @@ def main():
     # Load training data
     print("Loading training data...")
     triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
-    print(f"Total training pairs: {len(triplets)}")
+    print(f"Total training pairs (pre-decontam): {len(triplets)}")
+
+    # Decontaminate: remove any training samples that overlap with MTEB test sets
+    print("Building MTEB test LSH for decontamination...")
+    from src.data.decontaminate import build_test_lsh, filter_triplets, DECONTAM_TASKS
+    test_lsh = build_test_lsh(DECONTAM_TASKS)
+    triplets, removed = filter_triplets(triplets, test_lsh)
+    print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
 
     if not triplets:
         print("WARNING: No training data loaded. Using scaffold baseline.")
