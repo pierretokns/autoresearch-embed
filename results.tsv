@@ -6,3 +6,4 @@ e0931b1	27.20	75.3	51.5	se-dups;nq;msmarco	keep	exp-3 first clean baseline: SE+N
 8136ecc	32.69	78.4	50.8	glue;ms_marco;multi_nli;sentence-transformers/all-nli;sentence-transformers/stackexchange-duplicates	discard	test: verify wrapper pipeline with MPS optimizations
 1e3d2d1	0.00	0.0	0.0		crash	exp-8: projection_dim=768 + reddit diversity; targeting clustering(9%→fix) and retrieval(3%→fix)
 e1724f2	0.00	0.0	0.0		crash	exp-9: fix OOM - reduce batch sizes (256→128 warmup/contrastive, 128→64 finetune); same proj_dim=768 + reddit
+d19b9dc	0.00	0.0	0.0		crash	exp-10: fix OOM - batch_size 64/64/32 (9GB/step); proj_dim=768 + reddit; baseline for larger batches
