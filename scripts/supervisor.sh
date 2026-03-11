@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Supervisor: restarts Claude Code sessions on crash or context exhaustion.
-# Carries zero state — all state lives in git and TSV files.
+# Carries zero state — all state lives in git and JSONL files.
 #
 # Usage: bash scripts/supervisor.sh
 # Can be run via launchctl or in tmux.
@@ -53,7 +53,7 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
         --model claude-sonnet-4-6 \
         --dangerously-skip-permissions \
         --max-turns 200 \
-        "Read program.md and resume the experiment loop. Check results.tsv and git log --oneline -20 for current state. If uncommitted changes exist, git checkout . to clean up. Then continue experimenting." \
+        "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. Never stop." \
         2>&1 | tee "$log_file" || true
 
     restart_count=$((restart_count + 1))
