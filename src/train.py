@@ -245,32 +245,42 @@ def run_training_stage(
     return step
 
 
-def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: int = 7, batch_size: int = 256):
+def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: int = 7, batch_size: int = 64):
     """Mine hard negatives: embed all positives, find top-k nearest non-positives for each query."""
     print("\n=== Hard Negative Mining ===")
     model.eval()
-    max_len = 256
+    max_len = 128  # shorter seqs for faster mining
 
-    # Embed all positives
-    all_texts = [t["positive"][:500] for t in triplets]
+    # Free MPS memory from training before mining
+    if hasattr(torch.mps, 'empty_cache'):
+        torch.mps.empty_cache()
+    gc.collect()
+
+    # Embed all positives in small batches, keep on CPU
+    all_texts = [t["positive"][:400] for t in triplets]
     all_embeddings = []
     with torch.no_grad():
         for i in range(0, len(all_texts), batch_size):
             batch = all_texts[i:i+batch_size]
             enc = tokenizer(batch, padding=True, truncation=True, max_length=max_len, return_tensors="pt").to(device)
             emb = model(enc["input_ids"], enc["attention_mask"])
-            all_embeddings.append(emb.cpu())
-    all_emb = torch.cat(all_embeddings, dim=0)  # (N, D)
+            all_embeddings.append(emb.cpu().float())
+            del enc, emb
+            if i % 1000 == 0 and hasattr(torch.mps, 'empty_cache'):
+                torch.mps.empty_cache()
+    all_emb = torch.cat(all_embeddings, dim=0)  # (N, D) on CPU
+    del all_embeddings
 
     # For each query, find top-k hard negatives
-    query_texts = [t["query"][:500] for t in triplets]
+    query_texts = [t["query"][:400] for t in triplets]
     mined = list(triplets)
 
     with torch.no_grad():
         for i in range(0, len(query_texts), batch_size):
             batch_q = query_texts[i:i+batch_size]
             enc = tokenizer(batch_q, padding=True, truncation=True, max_length=max_len, return_tensors="pt").to(device)
-            q_emb = model(enc["input_ids"], enc["attention_mask"]).cpu()  # (B, D)
+            q_emb = model(enc["input_ids"], enc["attention_mask"]).cpu().float()  # (B, D) on CPU
+            del enc
 
             # Similarity to all positives
             sims = torch.matmul(q_emb, all_emb.T)  # (B, N)
@@ -300,36 +310,76 @@ def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: i
 def run_mteb_eval(model, tokenizer, device, tasks: list[str], output_dir: str = "mteb_results") -> dict:
     """Run MTEB evaluation via the official mteb library."""
     import mteb
+    import warnings
+    from mteb.models.abs_encoder import AbsEncoder
 
-    class ModelWrapper:
-        def __init__(self, m, tok, dev):
+    class ModelWrapper(AbsEncoder):
+        """MTEB AbsEncoder wrapper around our PyTorch model."""
+        mteb_model_meta = None
+
+        def __init__(self, m, tok):
             self.model = m
             self.tokenizer = tok
-            self.device = dev
 
-        def encode(self, sentences, batch_size=64, **kwargs):
-            return self.model.encode(sentences, self.tokenizer, batch_size=batch_size)
+        def encode(self, inputs, *, task_metadata=None, hf_split=None, hf_subset=None, prompt_type=None, **kwargs):
+            """inputs is a DataLoader yielding BatchedInput dicts with 'text' key."""
+            all_embs = []
+            for batch in inputs:
+                sentences = batch.get("text", batch.get("sentence", []))
+                if not sentences and batch:
+                    sentences = list(batch.values())[0]
+                if sentences:
+                    emb = self.model.encode(sentences, self.tokenizer, batch_size=64)
+                    all_embs.append(emb)
+            if all_embs:
+                return np.concatenate(all_embs, axis=0)
+            return np.zeros((0, self.model.output_dim))
 
-    wrapper = ModelWrapper(model, tokenizer, device)
+    wrapper = ModelWrapper(model, tokenizer)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    evaluation = mteb.MTEB(tasks=tasks)
-    results = evaluation.run(wrapper, output_folder=output_dir)
 
+    # Use deprecated MTEB class with task objects
+    task_objects = mteb.get_tasks(tasks=tasks, languages=["eng"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        ev = mteb.MTEB(tasks=task_objects)
+        results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
+
+    # Parse scores from TaskResult objects
     scores = {}
-    for task_name in tasks:
-        result_files = list(Path(output_dir).rglob(f"*{task_name}*.json"))
-        if result_files:
-            with open(result_files[0]) as f:
-                task_result = json.load(f)
+    for task_result in results:
+        task_name = getattr(task_result, 'task_name', None)
+        if task_name is None:
+            continue
+        if hasattr(task_result, 'scores'):
             for split_name in ["test", "validation", "dev"]:
-                if split_name in task_result:
-                    split_data = task_result[split_name]
-                    if isinstance(split_data, dict):
-                        score = split_data.get("main_score", 0)
-                        if isinstance(score, dict):
-                            score = score.get("spearman", score.get("ap", 0))
-                        scores[task_name] = float(score) * 100
+                if split_name in task_result.scores:
+                    split_scores = task_result.scores[split_name]
+                    if isinstance(split_scores, list) and split_scores:
+                        score = split_scores[0].get("main_score", 0)
+                    elif isinstance(split_scores, dict):
+                        score = split_scores.get("main_score", 0)
+                    else:
+                        score = 0
+                    scores[task_name] = float(score) * 100
                     break
+
+    # Fallback: parse JSON files from output_folder
+    if not scores:
+        for task_name in tasks:
+            result_files = list(Path(output_dir).rglob(f"*{task_name}*.json"))
+            if result_files:
+                with open(sorted(result_files)[-1]) as f:
+                    task_result = json.load(f)
+                for split_name in ["test", "validation", "dev"]:
+                    if split_name in task_result:
+                        split_data = task_result[split_name]
+                        if isinstance(split_data, dict):
+                            score = split_data.get("main_score", 0)
+                            if isinstance(score, dict):
+                                score = score.get("spearman", score.get("ap", 0))
+                            scores[task_name] = float(score) * 100
+                        break
 
     return scores
 
@@ -427,13 +477,20 @@ def main():
     if triplets:
         run_training_stage(model, tokenizer, triplets, contrastive_cfg, device, optimizer, "contrastive")
 
+    # Free MPS memory before mining
+    if hasattr(torch.mps, 'empty_cache'):
+        torch.mps.empty_cache()
+    gc.collect()
+
     # ---- Stage 3: Hard negative mining ----
     mining_cfg = stages.get("hard_neg_mining", {})
     if triplets:
+        # Cap at 20K for mining to keep similarity matrix manageable (CPU: 20K*256*4B = ~20MB)
+        mining_triplets = triplets[:20000]
         triplets_with_negs = mine_hard_negatives(
-            model, tokenizer, triplets, device,
+            model, tokenizer, mining_triplets, device,
             top_k=int(mining_cfg.get("top_k", 7)),
-            batch_size=int(mining_cfg.get("batch_size", 512)),
+            batch_size=64,  # small batch to avoid MPS OOM
         )
     else:
         triplets_with_negs = triplets
