@@ -140,19 +140,21 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     hypothesis = row.get("hypothesis", row.get("sentence2", ""))
                     if label == 0:  # entailment
                         all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
-            elif fmt == "quora_pairs":
-                # Quora: questions column has list of 2 questions, is_duplicate field
+            elif fmt == "se_pairs":
+                # StackExchange title-title-pair: title1 and title2 are duplicate question titles
                 for row in ds:
-                    qs = row.get("questions", {})
-                    if isinstance(qs, dict):
-                        texts = qs.get("text", [])
-                        is_dup = row.get("is_duplicate", 0)
-                        if is_dup and len(texts) >= 2:
-                            all_triplets.append({"query": texts[0], "positive": texts[1], "source": ds_id})
-                    elif isinstance(qs, list) and len(qs) >= 2:
-                        is_dup = row.get("is_duplicate", 0)
-                        if is_dup:
-                            all_triplets.append({"query": qs[0], "positive": qs[1], "source": ds_id})
+                    t1 = row.get("title1", "")
+                    t2 = row.get("title2", "")
+                    if t1 and t2:
+                        all_triplets.append({"query": t1, "positive": t2, "source": ds_id})
+            elif fmt == "nq_pairs":
+                # Natural Questions: query + Wikipedia answer passage
+                for row in ds:
+                    q = row.get("query", "")
+                    a = row.get("answer", "")
+                    if q and a and len(a) > 20:
+                        # Truncate long answers to first 256 chars
+                        all_triplets.append({"query": q, "positive": a[:300], "source": ds_id})
             elif fmt == "ms_marco":
                 # MS MARCO: query + positive passage from passages
                 for row in ds:
@@ -421,13 +423,13 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
-    # all-nli triplets: safe for training (pre-curated, no STS test overlap)
-    {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
-    # Quora question pairs: duplicate questions, no STS benchmark overlap
-    {"id": "quora", "config": None, "format": "quora_pairs"},
-    # MS MARCO passages: retrieval pairs, diverse domain
+    # StackExchange title pairs: Q&A forum duplicates (no STS overlap)
+    {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
+    # Natural Questions: Wikipedia QA pairs (no STS overlap)
+    {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
+    # MS MARCO passages: retrieval pairs, diverse web domain
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
-    # NOTE: snli and multi_nli REMOVED — overlap with SICK-R and STSBenchmark test sets
+    # NOTE: all-nli, snli, multi_nli REMOVED — contain Flickr captions that overlap with SICK-R/STSBenchmark
 ]
 
 
@@ -484,9 +486,9 @@ def main():
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
     # For warmup: NLI entailment only
-    # Warmup: use all-nli (shorter, varied NLI pairs) or all data if not available
-    nli_triplets = [t for t in triplets if t.get("source") == "sentence-transformers/all-nli"]
-    warmup_data = nli_triplets if nli_triplets else triplets
+    # Warmup: use SE pairs (short, similar queries) or all data if not available
+    se_triplets = [t for t in triplets if "stackexchange" in t.get("source", "")]
+    warmup_data = se_triplets if se_triplets else triplets
 
     optimizer = torch.optim.AdamW(
         model.parameters(),

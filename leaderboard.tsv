@@ -1,1 +1,2 @@
 commit	primary	sts_bench	sick_r	twitter_url	sprint_dup	20news	reddit_clust	scifact	nfcorpus	description
+e0931b1	27.20	45.71	49.23	68.08	34.12	9.11	8.82	4.06	2.25	exp-3 first clean baseline: SE+NQ+MSMARCO
