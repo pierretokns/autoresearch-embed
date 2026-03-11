@@ -3,7 +3,7 @@
 
 base_model: "answerdotai/ModernBERT-base"
 embedding_dim: 768
-projection_dim: 256
+projection_dim: 768
 pooling: "mean"  # mean, cls, weighted
 max_seq_length: 512
 normalize_embeddings: true
