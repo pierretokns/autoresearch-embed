@@ -9,3 +9,8 @@ __pycache__/
 data_cache/
 logs/
 *.egg-info/
+wandb/
+mteb_results/
+mteb_results_quick/
+mteb_results_test/
+result.json
