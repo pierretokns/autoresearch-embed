@@ -88,6 +88,16 @@ On new session: read `results.jsonl` and `git log --oneline -20`. If uncommitted
 
 Run the experiment loop until interrupted. If out of ideas: re-read the references above, combine two near-winners, try radical architecture changes, generate synthetic data for your weakest category, or search HF Hub / Kaggle for new datasets. There is always something to try.
 
+## Stage Checkpoints & Resume
+
+Training saves checkpoints after each stage (`checkpoints/stages/after_*.npz`). If a later stage crashes (e.g. OOM in mining), resume from where it left off instead of retraining from scratch:
+
+```
+uv run scripts/experiment.py "description" --resume-stage mining
+```
+
+Valid stages: `contrastive`, `mining`, `finetune`, `eval`. This loads the checkpoint from the prior stage and continues. Use this to avoid wasting 45+ min re-doing warmup+contrastive when only mining or finetune crashed.
+
 ## Memory Budget
 
-M2 Ultra: 64GB unified memory. MLX peak should stay well under 55GB (typical: ~6-10GB). If OOM, halve batch size and retry via `experiment.py`.
+M2 Ultra: 64GB unified memory. MLX peak should stay well under 55GB (typical: ~6-10GB). If OOM, halve batch size and retry. If only a later stage OOMs, use `--resume-stage` to skip the stages that already completed.

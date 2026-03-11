@@ -313,6 +313,9 @@ def main() -> int:
     extra_args: list[str] = []
     if "--quick-eval-only" in sys.argv:
         extra_args.append("--quick-eval-only")
+    for i, arg in enumerate(sys.argv):
+        if arg == "--resume-stage" and i + 1 < len(sys.argv):
+            extra_args.extend(["--resume-stage", sys.argv[i + 1]])
 
     print(f"[experiment] Starting: {description}")
     os.chdir(ROOT)

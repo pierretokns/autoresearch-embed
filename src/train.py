@@ -456,6 +456,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--quick-eval-only", action="store_true")
+    parser.add_argument("--resume-stage", type=str, default=None,
+                        choices=["contrastive", "mining", "finetune", "eval"],
+                        help="Skip stages before this one, loading checkpoint from prior stage")
     args = parser.parse_args()
 
     random.seed(42)
@@ -528,6 +531,35 @@ def main():
         triplets = []
 
     stages = config.get("stages", {})
+    resume_stage = args.resume_stage
+    STAGE_ORDER = ["warmup", "contrastive", "mining", "finetune", "eval"]
+    CHECKPOINT_DIR = Path("checkpoints/stages")
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+
+    def save_stage_checkpoint(stage_name: str):
+        """Save model weights after completing a stage."""
+        path = CHECKPOINT_DIR / f"after_{stage_name}.npz"
+        flat = dict(tree_flatten(model.parameters()))
+        mx.savez(str(path), **flat)
+        print(f"  [checkpoint] Saved after {stage_name} → {path}", flush=True)
+
+    def load_stage_checkpoint(stage_name: str) -> bool:
+        """Load model weights from a stage checkpoint. Returns True if loaded."""
+        path = CHECKPOINT_DIR / f"after_{stage_name}.npz"
+        if not path.exists():
+            print(f"  [checkpoint] ERROR: {path} not found, cannot resume", flush=True)
+            return False
+        weights = dict(mx.load(str(path)))
+        model.load_weights(list(weights.items()))
+        mx.eval(model.parameters())
+        print(f"  [checkpoint] Loaded from {path}", flush=True)
+        return True
+
+    def should_skip(stage_name: str) -> bool:
+        """Return True if this stage should be skipped due to --resume-stage."""
+        if resume_stage is None:
+            return False
+        return STAGE_ORDER.index(stage_name) < STAGE_ORDER.index(resume_stage)
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
@@ -541,16 +573,24 @@ def main():
 
     train_start = time.time()
 
-    if warmup_data:
+    if should_skip("warmup"):
+        print("=== Stage: warmup — SKIPPED (--resume-stage) ===", flush=True)
+    elif warmup_data:
         run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup")
+        save_stage_checkpoint("warmup")
 
     # ---- Stage 2: Full contrastive ----
     contrastive_cfg = stages.get("contrastive", {})
     contrastive_lr = float(contrastive_cfg.get("learning_rate", 5e-5))
     optimizer = optim.AdamW(learning_rate=contrastive_lr, weight_decay=weight_decay)
 
-    if triplets:
+    if should_skip("contrastive"):
+        print("=== Stage: contrastive — SKIPPED (--resume-stage) ===", flush=True)
+    elif triplets:
+        if resume_stage == "contrastive":
+            load_stage_checkpoint("warmup")
         run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
+        save_stage_checkpoint("contrastive")
 
     # Free MLX memory before hard negative mining (inference mode)
     try:
@@ -560,7 +600,12 @@ def main():
 
     # ---- Stage 3: Hard negative mining ----
     mining_cfg = stages.get("hard_neg_mining", {})
-    if triplets:
+    if should_skip("mining"):
+        print("=== Stage: hard_neg_mining — SKIPPED (--resume-stage) ===", flush=True)
+        triplets_with_negs = triplets
+    elif triplets:
+        if resume_stage == "mining":
+            load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
         mining_triplets = triplets[:8000]
         triplets_with_negs = mine_hard_negatives(
@@ -568,6 +613,7 @@ def main():
             top_k=int(mining_cfg.get("top_k", 7)),
             batch_size=32,
         )
+        save_stage_checkpoint("mining")
     else:
         triplets_with_negs = triplets
 
@@ -576,8 +622,20 @@ def main():
     finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
     optimizer = optim.AdamW(learning_rate=finetuning_lr, weight_decay=weight_decay)
 
-    if triplets_with_negs:
+    if should_skip("finetune"):
+        print("=== Stage: fine_tuning — SKIPPED (--resume-stage) ===", flush=True)
+    elif triplets_with_negs:
+        if resume_stage == "finetune":
+            load_stage_checkpoint("mining")
         run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning")
+        save_stage_checkpoint("finetune")
+
+    # Load latest checkpoint if resuming directly to eval
+    if resume_stage == "eval":
+        # Try finetune checkpoint first, fall back through the chain
+        for ckpt in ["finetune", "mining", "contrastive", "warmup"]:
+            if load_stage_checkpoint(ckpt):
+                break
 
     train_time = time.time() - train_start
     print(f"\nTotal training time: {train_time/60:.1f} min")
