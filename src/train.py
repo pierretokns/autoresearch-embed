@@ -1,5 +1,5 @@
 """
-Multi-stage contrastive embedding training loop.
+Multi-stage contrastive embedding training loop (MLX native).
 This is the main file the agent modifies during experiments.
 
 Usage: uv run src/train.py [--config configs/training_stages.yaml]
@@ -8,9 +8,8 @@ This file is AGENT-MUTABLE: architecture, optimizer, hyperparameters, stages,
 batch size, model size — everything is fair game.
 """
 
-import gc
+import hashlib
 import json
-import math
 import os
 import random
 import sys
@@ -20,8 +19,11 @@ from pathlib import Path
 # Ensure project root is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
+from mlx.utils import tree_flatten, tree_map
 import numpy as np
-import torch
 import yaml
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -40,91 +42,34 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
         return yaml.safe_load(f)
 
 
-# ---- Model ----
+# ---- MLX Loss Functions ----
 
-class EmbeddingModel(torch.nn.Module):
-    """Wraps a pretrained encoder with mean/cls pooling and optional projection."""
-
-    def __init__(self, encoder, hidden_size: int, projection_dim: int = None, pooling: str = "mean"):
-        super().__init__()
-        self.encoder = encoder
-        self.pooling = pooling
-        if projection_dim and projection_dim != hidden_size:
-            self.projection = torch.nn.Linear(hidden_size, projection_dim)
-            self.output_dim = projection_dim
-        else:
-            self.projection = None
-            self.output_dim = hidden_size
-
-    def forward(self, input_ids, attention_mask):
-        outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        hidden = outputs.last_hidden_state  # (B, T, H)
-
-        if self.pooling == "cls":
-            pooled = hidden[:, 0]
-        else:  # mean
-            mask = attention_mask.unsqueeze(-1).float()
-            pooled = (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
-
-        if self.projection is not None:
-            pooled = self.projection(pooled)
-
-        # L2 normalize
-        pooled = torch.nn.functional.normalize(pooled, p=2, dim=-1)
-        return pooled
-
-    def encode(self, sentences, tokenizer, batch_size=64, max_length=512):
-        """MTEB-compatible encode method. Keeps embeddings on device until final conversion."""
-        all_embs = []
-        self.eval()
-        # Cache device once to avoid per-batch next(self.parameters()).device overhead
-        _device = next(self.parameters()).device
-        with torch.no_grad():
-            for i in range(0, len(sentences), batch_size):
-                batch = sentences[i:i+batch_size]
-                enc = tokenizer(batch, padding=True, truncation=True,
-                                max_length=max_length, return_tensors="pt")
-                enc = {k: v.to(_device) for k, v in enc.items()}
-                emb = self.forward(enc["input_ids"], enc["attention_mask"])
-                # Keep on device — only convert to numpy at the end
-                all_embs.append(emb.float())
-        # Concatenate on device, then single copy to CPU + numpy
-        concatenated = torch.cat(all_embs, dim=0)
-        return concatenated.cpu().numpy()
-
-
-def infonce_loss(query_emb, positive_emb, temperature=0.05):
+def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05) -> mx.array:
     """InfoNCE loss with in-batch negatives."""
-    sim = torch.matmul(query_emb, positive_emb.T) / temperature
-    labels = torch.arange(sim.size(0), device=sim.device)
-    return torch.nn.functional.cross_entropy(sim, labels)
+    sim = mx.matmul(query_emb, positive_emb.T) / temperature
+    labels = mx.arange(sim.shape[0])
+    log_softmax = sim - mx.logsumexp(sim, axis=1, keepdims=True)
+    return -mx.mean(log_softmax[mx.arange(sim.shape[0]), labels])
 
 
-def infonce_loss_with_hard_negs(query_emb, positive_emb, hard_neg_emb, temperature=0.05, hard_neg_weight=2.0):
-    """InfoNCE loss with in-batch negatives plus explicit hard negatives."""
-    B = query_emb.size(0)
-    # In-batch similarity: (B, B)
-    sim_inbatch = torch.matmul(query_emb, positive_emb.T) / temperature
-    # Hard neg similarity: (B, 1) -> squeeze
-    sim_hardneg = torch.sum(query_emb * hard_neg_emb, dim=-1, keepdim=True) / temperature * hard_neg_weight
-    # Concatenate: (B, B+1)
-    logits = torch.cat([sim_inbatch, sim_hardneg], dim=1)
-    labels = torch.arange(B, device=query_emb.device)
-    return torch.nn.functional.cross_entropy(logits, labels)
+def infonce_loss_with_hard_negs(
+    query_emb: mx.array, positive_emb: mx.array, hard_neg_emb: mx.array,
+    temperature: float = 0.05, hard_neg_weight: float = 2.0,
+) -> mx.array:
+    """InfoNCE with in-batch negatives plus explicit hard negatives."""
+    B = query_emb.shape[0]
+    sim_inbatch = mx.matmul(query_emb, positive_emb.T) / temperature
+    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature * hard_neg_weight
+    logits = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
+    labels = mx.arange(B)
+    log_softmax = logits - mx.logsumexp(logits, axis=1, keepdims=True)
+    return -mx.mean(log_softmax[mx.arange(B), labels])
 
 
 # ---- Data Loading ----
 
 def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 50000) -> list[dict]:
-    """Load and combine multiple training datasets.
-
-    NOTE: Pre-tokenization optimization opportunity — tokenize all texts once
-    during loading and cache as tensors, avoiding repeated tokenizer calls in
-    the training loop. This is a bigger refactor (requires changing the data
-    format from dicts of strings to pre-tokenized batches) — TODO for a future
-    experiment.
-    """
-    from transformers import AutoTokenizer
+    """Load and combine multiple training datasets."""
     try:
         from datasets import load_dataset
     except ImportError:
@@ -150,56 +95,46 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     label = row.get("label", -1)
                     premise = row.get("premise", row.get("sentence1", ""))
                     hypothesis = row.get("hypothesis", row.get("sentence2", ""))
-                    if label == 0:  # entailment
+                    if label == 0:
                         all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
             elif fmt == "glue_mrpc":
-                # MRPC: paraphrase pairs, label=1 means paraphrase
                 for row in ds:
                     if row.get("label") == 1:
                         all_triplets.append({"query": row["sentence1"], "positive": row["sentence2"], "source": ds_id})
             elif fmt == "glue_qqp":
-                # QQP: duplicate question pairs, label=1 means duplicate
                 for row in ds:
                     if row.get("label") == 1:
                         all_triplets.append({"query": row["question1"], "positive": row["question2"], "source": ds_id})
             elif fmt == "mnli_nonpicture":
-                # MultiNLI: use only non-Flickr genres (government, fiction, telephone, travel, slate, 9/11)
-                # These genres don't overlap with SICK-R/STSBenchmark test sets
                 SAFE_GENRES = {"government", "fiction", "telephone", "travel", "slate", "nineeleven", "letters", "oup"}
                 for row in ds:
                     label = row.get("label", -1)
                     genre = row.get("genre", "")
-                    premise = row.get("premise", "")
-                    hypothesis = row.get("hypothesis", "")
-                    if label == 0 and genre in SAFE_GENRES:  # entailment only
-                        all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
+                    if label == 0 and genre in SAFE_GENRES:
+                        all_triplets.append({"query": row.get("premise", ""), "positive": row.get("hypothesis", ""), "source": ds_id})
             elif fmt == "se_pairs":
-                # StackExchange title-title-pair: title1 and title2 are duplicate question titles
                 for row in ds:
                     t1 = row.get("title1", "")
                     t2 = row.get("title2", "")
                     if t1 and t2:
                         all_triplets.append({"query": t1, "positive": t2, "source": ds_id})
             elif fmt == "nq_pairs":
-                # Natural Questions: query + Wikipedia answer passage
                 for row in ds:
                     q = row.get("query", "")
                     a = row.get("answer", "")
                     if q and a and len(a) > 20:
-                        # Truncate long answers to first 256 chars
                         all_triplets.append({"query": q, "positive": a[:300], "source": ds_id})
             elif fmt == "ms_marco":
-                # MS MARCO: query + positive passage from passages
                 for row in ds:
                     query = row.get("query", "")
                     passages = row.get("passages", {})
                     if isinstance(passages, dict):
                         texts = passages.get("passage_text", [])
                         labels = passages.get("is_selected", [])
-                        for i, (text, label) in enumerate(zip(texts, labels)):
+                        for text, label in zip(texts, labels):
                             if label == 1 and text:
                                 all_triplets.append({"query": query, "positive": text, "source": ds_id})
-                                break  # one positive per query
+                                break
             elif fmt == "triplet":
                 cols = ds.column_names
                 anchor_col = next((c for c in cols if c in ("anchor", "query", "sentence1", "text1")), cols[0])
@@ -217,7 +152,7 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                 score_col = next((c for c in cols if c in ("score", "label", "similarity")), None)
                 for row in ds:
                     score = float(row[score_col]) if score_col else 1.0
-                    if score >= 3.5:  # high similarity pairs only
+                    if score >= 3.5:
                         all_triplets.append({"query": str(row[s1_col]), "positive": str(row[s2_col]), "source": ds_id})
             print(f"    -> {len(all_triplets)} total pairs so far")
         except Exception as e:
@@ -226,25 +161,23 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
     return all_triplets
 
 
-# ---- Training Stage ----
+# ---- Training Stage (MLX) ----
 
 def run_training_stage(
     model,
     tokenizer,
     triplets: list[dict],
     stage_cfg: dict,
-    device,
     optimizer,
     stage_name: str,
 ):
-    """Run one training stage for the configured duration."""
+    """Run one training stage for the configured duration using MLX value_and_grad."""
     duration_s = float(stage_cfg.get("duration_minutes", 10)) * 60
     batch_size = int(stage_cfg.get("batch_size", 128))
     temperature = float(stage_cfg.get("temperature", 0.05))
-    max_seq_len = 256  # keep sequences short for speed
+    max_seq_len = 256
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
 
-    model.train()
     stage_start = time.time()
     step = 0
     total_loss = 0.0
@@ -253,6 +186,19 @@ def run_training_stage(
 
     data = list(triplets)
     random.shuffle(data)
+
+    def loss_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids=None, n_mask=None):
+        """Compute loss given tokenized inputs."""
+        q_emb = model(q_ids, q_mask)
+        p_emb = model(p_ids, p_mask)
+        if n_ids is not None:
+            n_emb = model(n_ids, n_mask)
+            return infonce_loss_with_hard_negs(q_emb, p_emb, n_emb,
+                                               temperature=temperature,
+                                               hard_neg_weight=hard_neg_weight)
+        return infonce_loss(q_emb, p_emb, temperature=temperature)
+
+    loss_grad_fn = nn.value_and_grad(model, loss_fn)
 
     while time.time() - stage_start < duration_s:
         for batch_start in range(0, len(data), batch_size):
@@ -265,36 +211,40 @@ def run_training_stage(
             queries = [t["query"][:500] for t in batch]
             positives = [t["positive"][:500] for t in batch]
 
-            q_enc = tokenizer(queries, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
-            p_enc = tokenizer(positives, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
+            q_enc = tokenizer(queries, padding=True, truncation=True,
+                              max_length=max_seq_len, return_tensors="np")
+            p_enc = tokenizer(positives, padding=True, truncation=True,
+                              max_length=max_seq_len, return_tensors="np")
 
-            # Mixed precision: autocast forward+loss to float16
-            # Halves memory and roughly doubles throughput. No GradScaler
-            # needed — MPS autocast works without one.
-            with torch.autocast(device.type, dtype=torch.float16, enabled=(device.type in ("mps", "cuda"))):
-                q_emb = model(q_enc["input_ids"], q_enc["attention_mask"])
-                p_emb = model(p_enc["input_ids"], p_enc["attention_mask"])
+            q_ids = mx.array(q_enc["input_ids"])
+            q_mask = mx.array(q_enc["attention_mask"])
+            p_ids = mx.array(p_enc["input_ids"])
+            p_mask = mx.array(p_enc["attention_mask"])
 
-                # Check for hard negatives
-                has_hard_negs = any(t.get("negatives") for t in batch)
-                if has_hard_negs and hard_neg_weight > 1.0:
-                    negs_text = []
-                    for t in batch:
-                        negs = t.get("negatives", [])
-                        negs_text.append(negs[0][:500] if negs else t["positive"][:500])
-                    n_enc = tokenizer(negs_text, padding=True, truncation=True, max_length=max_seq_len, return_tensors="pt").to(device)
-                    n_emb = model(n_enc["input_ids"], n_enc["attention_mask"])
-                    loss = infonce_loss_with_hard_negs(q_emb, p_emb, n_emb, temperature=temperature, hard_neg_weight=hard_neg_weight)
-                else:
-                    loss = infonce_loss(q_emb, p_emb, temperature=temperature)
+            # Check for hard negatives
+            has_hard_negs = any(t.get("negatives") for t in batch)
+            if has_hard_negs and hard_neg_weight > 1.0:
+                negs_text = []
+                for t in batch:
+                    negs = t.get("negatives", [])
+                    negs_text.append(negs[0][:500] if negs else t["positive"][:500])
+                n_enc = tokenizer(negs_text, padding=True, truncation=True,
+                                  max_length=max_seq_len, return_tensors="np")
+                n_ids = mx.array(n_enc["input_ids"])
+                n_mask = mx.array(n_enc["attention_mask"])
+                loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids, n_mask)
+            else:
+                loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
 
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            # Grad clipping
+            grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
+
+            optimizer.update(model, grads)
+            mx.eval(model.parameters(), optimizer.state, loss)
 
             step += 1
-            total_loss += loss.item()
+            loss_val = float(loss.item())
+            total_loss += loss_val
 
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
@@ -303,7 +253,7 @@ def run_training_stage(
                 try:
                     import wandb
                     if wandb.run is not None:
-                        wandb.log({"loss": loss.item(), "avg_loss": avg_loss, "step": step, "stage": stage_name})
+                        wandb.log({"loss": loss_val, "avg_loss": avg_loss, "step": step, "stage": stage_name})
                 except Exception:
                     pass
 
@@ -312,75 +262,47 @@ def run_training_stage(
     stage_time = time.time() - stage_start
     avg_loss = total_loss / max(step, 1)
     print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s")
-
-    # Free MPS memory after each training stage completes
-    if hasattr(torch.mps, 'empty_cache'):
-        torch.mps.empty_cache()
-    gc.collect()
-
     return step
 
 
-def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: int = 7, batch_size: int = 64):
-    """Mine hard negatives: embed all positives, find top-k nearest non-positives for each query."""
+def mine_hard_negatives(model, tokenizer, triplets: list[dict], top_k: int = 7, batch_size: int = 128):
+    """Mine hard negatives using numpy (model.encode_sentences returns numpy)."""
     print("\n=== Hard Negative Mining ===")
-    model.eval()
-    max_len = 128  # shorter seqs for faster mining
+    max_len = 128
 
-    # Free MPS memory from training before mining
-    if hasattr(torch.mps, 'empty_cache'):
-        torch.mps.empty_cache()
-    gc.collect()
-
-    # Embed all positives in small batches, keep on CPU
     all_texts = [t["positive"][:400] for t in triplets]
-    all_embeddings = []
-    with torch.no_grad():
-        for i in range(0, len(all_texts), batch_size):
-            batch = all_texts[i:i+batch_size]
-            enc = tokenizer(batch, padding=True, truncation=True, max_length=max_len, return_tensors="pt").to(device)
-            emb = model(enc["input_ids"], enc["attention_mask"])
-            all_embeddings.append(emb.cpu().float())
-            del enc, emb
-            if i % 1000 == 0 and hasattr(torch.mps, 'empty_cache'):
-                torch.mps.empty_cache()
-    all_emb = torch.cat(all_embeddings, dim=0)  # (N, D) on CPU
-    del all_embeddings
-
-    # For each query, find top-k hard negatives
     query_texts = [t["query"][:400] for t in triplets]
+
+    print(f"  Embedding {len(all_texts)} documents...")
+    doc_embs = model.encode_sentences(all_texts, tokenizer, batch_size=batch_size, max_length=max_len)
+
+    print(f"  Embedding {len(query_texts)} queries...")
+    query_embs = model.encode_sentences(query_texts, tokenizer, batch_size=batch_size, max_length=max_len)
+
+    print(f"  Mining top-{top_k} hard negatives per query...")
     mined = list(triplets)
 
-    # TODO: For larger corpora (>100K), replace brute-force matmul with FAISS
-    # approximate nearest neighbor search for sub-linear mining time.
-    # Process queries in chunks with memory cleanup between chunks.
-    with torch.no_grad():
-        for i in range(0, len(query_texts), batch_size):
-            batch_q = query_texts[i:i+batch_size]
-            enc = tokenizer(batch_q, padding=True, truncation=True, max_length=max_len, return_tensors="pt").to(device)
-            q_emb = model(enc["input_ids"], enc["attention_mask"]).cpu().float()  # (B, D) on CPU
-            del enc
+    chunk_size = 2000
+    for start in range(0, len(query_texts), chunk_size):
+        end = min(start + chunk_size, len(query_texts))
+        chunk_q = query_embs[start:end]
+        sims = chunk_q @ doc_embs.T
 
-            # Similarity to all positives
-            sims = torch.matmul(q_emb, all_emb.T)  # (B, N)
-
-            for j in range(len(batch_q)):
-                idx = i + j
-                sims[j, idx] = -1.0  # exclude self
-                # Also exclude nearby positives
-                top_sims, top_indices = sims[j].topk(top_k + 5)
-                hard_negs = []
-                for sim_val, neg_idx in zip(top_sims.tolist(), top_indices.tolist()):
-                    if 0.3 <= sim_val <= 0.95 and neg_idx != idx:
-                        hard_negs.append(all_texts[neg_idx])
-                    if len(hard_negs) >= top_k:
-                        break
-                if hard_negs:
-                    mined[idx] = dict(mined[idx])
-                    mined[idx]["negatives"] = hard_negs
-
-            # Cleanup between chunks to keep memory bounded
-            del q_emb, sims
+        for i in range(end - start):
+            idx = start + i
+            row = sims[i].copy()
+            row[idx] = -1.0
+            top_indices = np.argsort(row)[-top_k - 5:][::-1]
+            hard_negs = []
+            for neg_idx in top_indices:
+                sim_val = row[neg_idx]
+                if 0.3 <= sim_val <= 0.95 and neg_idx != idx:
+                    hard_negs.append(all_texts[neg_idx])
+                if len(hard_negs) >= top_k:
+                    break
+            if hard_negs:
+                mined[idx] = dict(mined[idx])
+                mined[idx]["negatives"] = hard_negs
 
     neg_count = sum(1 for t in mined if t.get("negatives"))
     print(f"  Mined hard negatives for {neg_count}/{len(mined)} triplets")
@@ -389,14 +311,14 @@ def mine_hard_negatives(model, tokenizer, triplets: list[dict], device, top_k: i
 
 # ---- MTEB Evaluation ----
 
-def run_mteb_eval(model, tokenizer, device, tasks: list[str], output_dir: str = "mteb_results") -> dict:
+def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_results") -> dict:
     """Run MTEB evaluation via the official mteb library."""
     import mteb
     import warnings
     from mteb.models.abs_encoder import AbsEncoder
 
     class ModelWrapper(AbsEncoder):
-        """MTEB AbsEncoder wrapper around our PyTorch model."""
+        """MTEB AbsEncoder wrapper around our MLX model."""
         mteb_model_meta = None
 
         def __init__(self, m, tok):
@@ -411,7 +333,7 @@ def run_mteb_eval(model, tokenizer, device, tasks: list[str], output_dir: str = 
                 if not sentences and batch:
                     sentences = list(batch.values())[0]
                 if sentences:
-                    emb = self.model.encode(sentences, self.tokenizer, batch_size=64)
+                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=64)
                     all_embs.append(emb)
             if all_embs:
                 return np.concatenate(all_embs, axis=0)
@@ -420,14 +342,12 @@ def run_mteb_eval(model, tokenizer, device, tasks: list[str], output_dir: str = 
     wrapper = ModelWrapper(model, tokenizer)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Use deprecated MTEB class with task objects
     task_objects = mteb.get_tasks(tasks=tasks, languages=["eng"])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         ev = mteb.MTEB(tasks=task_objects)
         results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
 
-    # Parse scores from TaskResult objects
     scores = {}
     for task_result in results:
         task_name = getattr(task_result, 'task_name', None)
@@ -446,7 +366,6 @@ def run_mteb_eval(model, tokenizer, device, tasks: list[str], output_dir: str = 
                     scores[task_name] = float(score) * 100
                     break
 
-    # Fallback: parse JSON files from output_folder
     if not scores:
         for task_name in tasks:
             result_files = list(Path(output_dir).rglob(f"*{task_name}*.json"))
@@ -478,13 +397,9 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
-    # QQP: Quora Question Pairs — duplicate questions (clean, no STS/news overlap)
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
-    # StackExchange title pairs: Q&A forum duplicates (clean)
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
-    # MS MARCO passages: retrieval pairs (clean)
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
-    # Natural Questions: query + Wikipedia passage (clean retrieval signal)
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
 ]
 
@@ -496,15 +411,16 @@ def main():
     parser.add_argument("--quick-eval-only", action="store_true")
     args = parser.parse_args()
 
-    # Reproducibility seeds
     random.seed(42)
     np.random.seed(42)
-    torch.manual_seed(42)
+    mx.random.seed(42)
 
     config = load_config(args.config)
     total_start = time.time()
 
-    # Initialize wandb (best-effort — wrapper has fallback)
+    print(f"MLX device: {mx.default_device()}")
+    print(f"MLX version: {mx.__version__}")
+
     experiment_desc = os.environ.get("EXPERIMENT_DESC", "unnamed")
     _wandb_run = None
     try:
@@ -517,38 +433,26 @@ def main():
         print(f"wandb init failed (non-fatal): {e}")
         wandb = None
 
-    # Device
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-        print("Using MPS (Apple Silicon GPU)")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("Using CUDA")
-    else:
-        device = torch.device("cpu")
-        print("Using CPU")
+    from src.model import ModernBERTConfig, EmbeddingModel, load_from_safetensors
 
-    # Load model
     model_name = config.get("base_model", "answerdotai/ModernBERT-base")
     print(f"Loading base model: {model_name}")
-    from transformers import AutoTokenizer, AutoModel
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    encoder = AutoModel.from_pretrained(model_name)
-    hidden_size = encoder.config.hidden_size
 
+    bert_config = ModernBERTConfig()
     model = EmbeddingModel(
-        encoder=encoder,
-        hidden_size=hidden_size,
+        bert_config,
         projection_dim=config.get("projection_dim"),
         pooling=config.get("pooling", "mean"),
-    ).to(device)
+    )
+    model = load_from_safetensors(model, model_name)
+    mx.eval(model.parameters())
 
-    num_params = sum(p.numel() for p in model.parameters())
+    num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
     print(f"Model parameters: {num_params / 1e6:.1f}M")
 
-    # Load training data with decontamination caching
-    # Cache key: hash of dataset config. Invalidates when DATASETS list changes.
-    import hashlib
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
     ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -556,81 +460,70 @@ def main():
     if cache_path.exists():
         print(f"Loading cached clean triplets from {cache_path}...")
         triplets = json.loads(cache_path.read_text())
-        removed = 0  # already decontaminated
+        removed = 0
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
         triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
 
-        # Decontaminate: remove any training samples that overlap with MTEB test sets
         print("Building MTEB test LSH for decontamination...")
         from src.data.decontaminate import build_test_lsh, filter_triplets, DECONTAM_TASKS
         test_lsh = build_test_lsh(DECONTAM_TASKS)
         triplets, removed = filter_triplets(triplets, test_lsh)
         print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
 
-        # Cache for future runs
         cache_path.write_text(json.dumps(triplets))
         print(f"Cached clean triplets to {cache_path}")
 
     if not triplets:
-        print("WARNING: No training data loaded. Using scaffold baseline.")
+        print("WARNING: No training data loaded.")
         triplets = []
 
     stages = config.get("stages", {})
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    # For warmup: use QQP (short question pairs) + SE-dups for high-similarity paraphrase signal
     warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "")]
     if not warmup_data:
         warmup_data = triplets
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(warmup_cfg.get("learning_rate", 1e-4)),
-        weight_decay=float(config.get("optimizer", {}).get("weight_decay", 0.01)),
-    )
+    warmup_lr = float(warmup_cfg.get("learning_rate", 1e-4))
+    weight_decay = float(config.get("optimizer", {}).get("weight_decay", 0.01))
+    optimizer = optim.AdamW(learning_rate=warmup_lr, weight_decay=weight_decay)
+
     train_start = time.time()
 
     if warmup_data:
-        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, device, optimizer, "warmup")
+        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup")
 
     # ---- Stage 2: Full contrastive ----
     contrastive_cfg = stages.get("contrastive", {})
-    # Lower LR for main contrastive stage
-    for pg in optimizer.param_groups:
-        pg["lr"] = float(contrastive_cfg.get("learning_rate", 5e-5))
+    contrastive_lr = float(contrastive_cfg.get("learning_rate", 5e-5))
+    optimizer = optim.AdamW(learning_rate=contrastive_lr, weight_decay=weight_decay)
 
     if triplets:
-        run_training_stage(model, tokenizer, triplets, contrastive_cfg, device, optimizer, "contrastive")
-
-    # Free MPS memory before mining
-    if hasattr(torch.mps, 'empty_cache'):
-        torch.mps.empty_cache()
-    gc.collect()
+        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
 
     # ---- Stage 3: Hard negative mining ----
     mining_cfg = stages.get("hard_neg_mining", {})
     if triplets:
-        # Cap at 20K for mining to keep similarity matrix manageable (CPU: 20K*256*4B = ~20MB)
         mining_triplets = triplets[:20000]
         triplets_with_negs = mine_hard_negatives(
-            model, tokenizer, mining_triplets, device,
+            model, tokenizer, mining_triplets,
             top_k=int(mining_cfg.get("top_k", 7)),
-            batch_size=64,  # small batch to avoid MPS OOM
+            batch_size=128,
         )
     else:
         triplets_with_negs = triplets
 
     # ---- Stage 4: Hard negative fine-tuning ----
     finetuning_cfg = stages.get("fine_tuning", {})
-    for pg in optimizer.param_groups:
-        pg["lr"] = float(finetuning_cfg.get("learning_rate", 1e-5))
+    finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
+    optimizer = optim.AdamW(learning_rate=finetuning_lr, weight_decay=weight_decay)
 
     if triplets_with_negs:
-        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, device, optimizer, "fine_tuning")
+        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning")
 
     train_time = time.time() - train_start
     print(f"\nTotal training time: {train_time/60:.1f} min")
@@ -638,15 +531,11 @@ def main():
     # Save checkpoint
     ckpt_dir = Path("checkpoints") / f"exp_{time.strftime('%Y%m%d_%H%M%S')}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        "model_state_dict": model.state_dict(),
-        "config": config,
-        "num_params": num_params,
-        "train_time_s": train_time,
-    }, ckpt_dir / "model.pt")
+
+    weights = dict(tree_flatten(model.parameters()))
+    mx.savez(str(ckpt_dir / "model.npz"), **weights)
     with open(ckpt_dir / "config.yaml", "w") as f:
         yaml.dump(config, f)
-    # Symlink as latest
     latest = Path("checkpoints/latest")
     if latest.is_symlink() or latest.exists():
         latest.unlink()
@@ -655,22 +544,16 @@ def main():
 
     # ---- Evaluation ----
     print("\nRunning MTEB evaluation...")
-    model.eval()
 
     eval_tasks = QUICK_TASKS if args.quick_eval_only else FULL_TASKS
     eval_outdir = "mteb_results_quick" if args.quick_eval_only else "mteb_results"
 
     try:
-        scores = run_mteb_eval(model, tokenizer, device, eval_tasks, output_dir=eval_outdir)
+        scores = run_mteb_eval(model, tokenizer, eval_tasks, output_dir=eval_outdir)
     except Exception as e:
         print(f"MTEB eval failed: {e}")
         import traceback; traceback.print_exc()
         scores = {}
-
-    # Free MPS memory after evaluation completes
-    if hasattr(torch.mps, 'empty_cache'):
-        torch.mps.empty_cache()
-    gc.collect()
 
     # Compute category averages
     sts_scores = [scores.get("STSBenchmark", 0), scores.get("SICK-R", 0)]
@@ -687,21 +570,16 @@ def main():
 
     primary = 0.3 * sts_avg + 0.2 * pair_avg + 0.2 * cluster_avg + 0.3 * retrieval_avg
 
-    # Peak memory
-    if torch.backends.mps.is_available():
-        peak_mem = torch.mps.driver_allocated_memory() / 1024**3
-    else:
-        peak_mem = 0.0
-
+    peak_mem = mx.get_peak_memory() / 1024**3
     total_time = time.time() - total_start
 
     # === DO NOT REMOVE: result.json output required by experiment.py ===
     result_data = {
         "primary_score": round(primary, 4),
-        "sts_avg": round(sts_avg, 4),
-        "pair_class_avg": round(pair_avg, 4),
-        "cluster_avg": round(cluster_avg, 4),
-        "retrieval_avg": round(retrieval_avg, 4),
+        "sts_avg": round(float(sts_avg), 4),
+        "pair_class_avg": round(float(pair_avg), 4),
+        "cluster_avg": round(float(cluster_avg), 4),
+        "retrieval_avg": round(float(retrieval_avg), 4),
         "training_minutes": round(train_time / 60, 1),
         "peak_memory_gb": round(peak_mem, 1),
         "num_params_M": round(num_params / 1e6, 1),
@@ -713,18 +591,16 @@ def main():
         "datasets": list({t.get("source", "unknown") for t in triplets}),
         "decontam_removed": removed,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "framework": "mlx",
     }
     if _wandb_run is not None:
         result_data["wandb_run_id"] = _wandb_run.id
 
-    # Write result.json to project root
     with open("result.json", "w") as f:
         json.dump(result_data, f, indent=2)
-    # Also write to checkpoint dir
     with open(ckpt_dir / "result.json", "w") as f:
         json.dump(result_data, f, indent=2)
 
-    # Register datasets in manifest
     manifest_path = Path("data_cache/manifest.jsonl")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     for ds_spec in DATASETS:
@@ -737,13 +613,12 @@ def main():
         with open(manifest_path, "a") as f:
             f.write(json.dumps(manifest_entry) + "\n")
 
-    # Log final scores to wandb
     try:
         import wandb
         if wandb.run is not None:
-            wandb.log({"primary_score": primary, "sts_avg": sts_avg,
-                        "pair_class_avg": pair_avg, "cluster_avg": cluster_avg,
-                        "retrieval_avg": retrieval_avg})
+            wandb.log({"primary_score": primary, "sts_avg": float(sts_avg),
+                        "pair_class_avg": float(pair_avg), "cluster_avg": float(cluster_avg),
+                        "retrieval_avg": float(retrieval_avg)})
             for task, score in scores.items():
                 wandb.log({f"mteb/{task}": score})
             wandb.finish()
@@ -751,13 +626,12 @@ def main():
         print(f"wandb finish failed (non-fatal): {e}")
     # === END result.json output ===
 
-    # Human-readable summary (also parsed by experiment.py fallback)
     print("\n---")
     print(f"primary_score:     {primary:.4f}")
-    print(f"sts_avg:           {sts_avg:.4f}")
-    print(f"pair_class_avg:    {pair_avg:.4f}")
-    print(f"cluster_avg:       {cluster_avg:.4f}")
-    print(f"retrieval_avg:     {retrieval_avg:.4f}")
+    print(f"sts_avg:           {float(sts_avg):.4f}")
+    print(f"pair_class_avg:    {float(pair_avg):.4f}")
+    print(f"cluster_avg:       {float(cluster_avg):.4f}")
+    print(f"retrieval_avg:     {float(retrieval_avg):.4f}")
     print(f"training_minutes:  {train_time / 60:.1f}")
     print(f"peak_memory_gb:    {peak_mem:.1f}")
     print(f"num_params_M:      {num_params / 1e6:.1f}")
