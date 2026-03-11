@@ -7,6 +7,10 @@ This file is AGENT-MUTABLE.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 from huggingface_hub import HfApi
 from datasets import load_dataset
 

@@ -3,7 +3,7 @@
 # Carries zero state — all state lives in git and TSV files.
 #
 # Usage: bash scripts/supervisor.sh
-# Run in tmux and walk away.
+# Can be run via launchctl or in tmux.
 #
 # *** READ-ONLY — DO NOT MODIFY THIS FILE ***
 
@@ -13,13 +13,23 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$PROJECT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
-MAX_RESTARTS=100
-RESTART_DELAY=10
+MAX_RESTARTS=500
+RESTART_DELAY=15
 restart_count=0
+
+# Prevent sleep while running
+caffeinate -dims &
+CAFFEINATE_PID=$!
+trap "kill $CAFFEINATE_PID 2>/dev/null" EXIT
+
+# Ensure PATH includes required tools
+export PATH="/Users/pierre/.local/bin:/opt/homebrew/bin:$PATH"
 
 echo "[supervisor] Project: $PROJECT_DIR"
 echo "[supervisor] Logs: $LOG_DIR"
 echo "[supervisor] Max restarts: $MAX_RESTARTS"
+echo "[supervisor] caffeinate PID: $CAFFEINATE_PID"
+echo "[supervisor] Claude: $(which claude)"
 
 while [ $restart_count -lt $MAX_RESTARTS ]; do
     timestamp=$(date +%Y%m%d_%H%M%S)
@@ -34,8 +44,9 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
     # Run Claude Code in non-interactive mode
     # --print: output only (no TUI)
     # --max-turns: prevent context exhaustion crash (clean exit instead)
-    # --allowedTools: permit autonomous operation
+    # --model: use sonnet for experiment planning (cheaper, fast)
     cd "$PROJECT_DIR" && claude --print \
+        --model claude-sonnet-4-6 \
         --prompt "Read program.md and resume the experiment loop. Check results.tsv and git log --oneline -20 for current state. If uncommitted changes exist, git checkout . to clean up. Then continue experimenting." \
         --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \
         --max-turns 200 \

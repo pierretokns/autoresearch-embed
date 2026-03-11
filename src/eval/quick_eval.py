@@ -9,6 +9,10 @@ If quick eval shows regression, skip full eval and discard immediately.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 from src.eval.mteb_runner import evaluate, print_results, CATEGORY_WEIGHTS
 
 QUICK_TASKS = [

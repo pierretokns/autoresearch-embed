@@ -10,7 +10,10 @@ Threshold: per-task contamination rate must be below 1%.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from datasketch import MinHash, MinHashLSH
 from datasets import load_dataset
