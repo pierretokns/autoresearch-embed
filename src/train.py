@@ -200,6 +200,23 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     # Pair consecutive texts with same label
                     for i in range(0, min(len(texts) - 1, max_rows_per_dataset // len(label_to_texts)), 2):
                         all_triplets.append({"query": texts[i], "positive": texts[i + 1], "source": ds_id})
+            elif fmt == "yahoo_answers_label_pairs":
+                # Yahoo Answers Topics: group by topic, pair same-topic questions
+                import random as _random
+                label_to_texts: dict = {}
+                for row in ds:
+                    topic = str(row.get("topic", row.get("label", -1)))
+                    title = row.get("question_title", "")
+                    content = row.get("question_content", "")
+                    text = (title + " " + content).strip()
+                    if text and len(text) > 20:
+                        label_to_texts.setdefault(topic, []).append(str(text)[:400])
+                for lbl, texts in label_to_texts.items():
+                    if len(texts) < 2:
+                        continue
+                    _random.shuffle(texts)
+                    for i in range(0, min(len(texts) - 1, max_rows_per_dataset // max(len(label_to_texts), 1)), 2):
+                        all_triplets.append({"query": texts[i], "positive": texts[i + 1], "source": ds_id})
             elif fmt == "pair_score":
                 cols = ds.column_names
                 s1_col = next((c for c in cols if c in ("sentence1", "text1", "anchor")), cols[0])
@@ -464,8 +481,12 @@ DATASETS = [
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
     # Reddit title-body pairs: high topic diversity → better clustering signal
     {"id": "sentence-transformers/reddit-title-body", "config": None, "format": "reddit_title_body", "streaming": True},
-    # AG News: same-label pairs improve news topic clustering
+    # AG News: same-label pairs improve news topic clustering (4 classes)
     {"id": "ag_news", "config": None, "format": "label_pairs"},
+    # DBpedia-14: 14 ontology classes (Company, School, Artist, ...) for finer topic separation
+    {"id": "fancyzhx/dbpedia_14", "config": None, "format": "label_pairs"},
+    # Yahoo Answers Topics: 10 classes for Q&A topic diversity
+    {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
 ]
 
 
