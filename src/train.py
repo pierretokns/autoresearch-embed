@@ -294,7 +294,7 @@ def run_training_stage(
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
                 avg_loss = total_loss / step
-                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s")
+                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                 try:
                     import wandb
                     if wandb.run is not None:
@@ -306,7 +306,7 @@ def run_training_stage(
 
     stage_time = time.time() - stage_start
     avg_loss = total_loss / max(step, 1)
-    print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s")
+    print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s", flush=True)
     return step
 
 

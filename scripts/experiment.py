@@ -366,12 +366,17 @@ def main() -> int:
                 bufsize=1,
             )
             assert proc.stdout is not None
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                log_file.write(line)
-                log_file.flush()
-            proc.wait()
+            # Use readline() instead of iterator to avoid Python's
+            # internal read-ahead buffer (fixes log buffering delay)
+            while True:
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    log_file.write(line)
+                    log_file.flush()
         if proc.returncode != 0:
             print(f"[experiment] Training exited with code {proc.returncode}")
             crashed = True
