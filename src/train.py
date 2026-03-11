@@ -140,6 +140,31 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     hypothesis = row.get("hypothesis", row.get("sentence2", ""))
                     if label == 0:  # entailment
                         all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
+            elif fmt == "quora_pairs":
+                # Quora: questions column has list of 2 questions, is_duplicate field
+                for row in ds:
+                    qs = row.get("questions", {})
+                    if isinstance(qs, dict):
+                        texts = qs.get("text", [])
+                        is_dup = row.get("is_duplicate", 0)
+                        if is_dup and len(texts) >= 2:
+                            all_triplets.append({"query": texts[0], "positive": texts[1], "source": ds_id})
+                    elif isinstance(qs, list) and len(qs) >= 2:
+                        is_dup = row.get("is_duplicate", 0)
+                        if is_dup:
+                            all_triplets.append({"query": qs[0], "positive": qs[1], "source": ds_id})
+            elif fmt == "ms_marco":
+                # MS MARCO: query + positive passage from passages
+                for row in ds:
+                    query = row.get("query", "")
+                    passages = row.get("passages", {})
+                    if isinstance(passages, dict):
+                        texts = passages.get("passage_text", [])
+                        labels = passages.get("is_selected", [])
+                        for i, (text, label) in enumerate(zip(texts, labels)):
+                            if label == 1 and text:
+                                all_triplets.append({"query": query, "positive": text, "source": ds_id})
+                                break  # one positive per query
             elif fmt == "triplet":
                 cols = ds.column_names
                 anchor_col = next((c for c in cols if c in ("anchor", "query", "sentence1", "text1")), cols[0])
@@ -396,9 +421,13 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
+    # all-nli triplets: safe for training (pre-curated, no STS test overlap)
     {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
-    {"id": "snli", "config": None, "format": "nli"},
-    {"id": "multi_nli", "config": None, "format": "nli"},
+    # Quora question pairs: duplicate questions, no STS benchmark overlap
+    {"id": "quora", "config": None, "format": "quora_pairs"},
+    # MS MARCO passages: retrieval pairs, diverse domain
+    {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
+    # NOTE: snli and multi_nli REMOVED — overlap with SICK-R and STSBenchmark test sets
 ]
 
 
@@ -455,7 +484,8 @@ def main():
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
     # For warmup: NLI entailment only
-    nli_triplets = [t for t in triplets if t.get("source") in ("snli", "multi_nli", "sentence-transformers/all-nli")]
+    # Warmup: use all-nli (shorter, varied NLI pairs) or all data if not available
+    nli_triplets = [t for t in triplets if t.get("source") == "sentence-transformers/all-nli"]
     warmup_data = nli_triplets if nli_triplets else triplets
 
     optimizer = torch.optim.AdamW(
