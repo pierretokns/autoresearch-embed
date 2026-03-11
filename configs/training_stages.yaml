@@ -43,7 +43,7 @@ stages:
     duration_minutes: 30
     data: "all_curated_with_hard_negs"
     loss: "infonce"
-    temperature: 0.02
+    temperature: 0.05
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
