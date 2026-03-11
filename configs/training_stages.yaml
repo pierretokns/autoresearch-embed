@@ -10,8 +10,8 @@ normalize_embeddings: true
 
 stages:
   warmup:
-    duration_minutes: 10
-    data: "nli_entailment_only"
+    duration_minutes: 15
+    data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
     learning_rate: 1.0e-4
@@ -22,7 +22,7 @@ stages:
     freeze_encoder_layers: 0  # freeze first N layers
 
   contrastive:
-    duration_minutes: 20
+    duration_minutes: 30
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -40,7 +40,7 @@ stages:
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
-    duration_minutes: 20
+    duration_minutes: 30
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.02

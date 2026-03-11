@@ -478,18 +478,14 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
-    # all-nli triplets: DECONTAMINATED via MinHash filter before use
-    {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
-    # MRPC paraphrases: DECONTAMINATED (news overlap with STSBenchmark)
-    {"id": "glue", "config": "mrpc", "format": "glue_mrpc"},
-    # QQP: Quora Question Pairs — duplicate questions (clean, no STS overlap)
+    # QQP: Quora Question Pairs — duplicate questions (clean, no STS/news overlap)
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
-    # MultiNLI non-picture genres: government, fiction, telephone, travel
-    {"id": "multi_nli", "config": None, "format": "mnli_nonpicture"},
     # StackExchange title pairs: Q&A forum duplicates (clean)
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
     # MS MARCO passages: retrieval pairs (clean)
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
+    # Natural Questions: query + Wikipedia passage (clean retrieval signal)
+    {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
 ]
 
 
@@ -586,11 +582,8 @@ def main():
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    # For warmup: NLI entailment only
-    # Warmup: use paraphrase pairs (MRPC + QQP) - short, high-similarity pairs
-    para_triplets = [t for t in triplets if t.get("source") in ("glue", ) or "mrpc" in t.get("source", "") or "qqp" in t.get("source", "")]
-    # Fallback to MultiNLI or all data
-    warmup_data = para_triplets if para_triplets else [t for t in triplets if "mnli" in t.get("source", "") or "multi_nli" in t.get("source", "")]
+    # For warmup: use QQP (short question pairs) + SE-dups for high-similarity paraphrase signal
+    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "")]
     if not warmup_data:
         warmup_data = triplets
 
