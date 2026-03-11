@@ -146,6 +146,19 @@ LOOP FOREVER:
    Redirect everything — do NOT let output flood your context.
    IMPORTANT: Always set PYTHONUNBUFFERED=1 so run.log streams in real-time for monitoring.
 
+## Weights & Biases (wandb)
+
+All training runs MUST log to wandb. The account is already authenticated (gourmand-labs).
+Use project name `autoresearch-embed` and set run name to the experiment description.
+
+In `src/train.py`, integrate wandb as follows:
+- `wandb.init(project="autoresearch-embed", name=<experiment_desc>, config=<config_dict>)`
+- Log per-step: `wandb.log({"loss": loss, "step": step, "stage": stage_name})`
+- Log per-stage: `wandb.log({"stage_avg_loss": avg_loss, "stage_steps": step_count})`
+- Log final MTEB scores: `wandb.log({"primary_score": primary, "sts_avg": ..., ...})`
+- `wandb.finish()` at end of training
+- If wandb fails (network issue), catch the exception and continue — never let wandb crash training.
+
 6. **Handle crashes.** If training crashes:
    - Read `tail -50 run.log` to diagnose.
    - If OOM: reduce batch size, retry.
@@ -166,14 +179,17 @@ LOOP FOREVER:
         - `git add results.tsv leaderboard.tsv && git commit --amend --no-edit`
         - `ah post embed-results "KEEP exp-N | <details>"`
         - `ah push`
+        - `git push origin HEAD` ← ALWAYS push after a kept experiment
      c. IF contamination FAILS:
         - Append to results.tsv (status=contaminated)
         - `git reset --hard HEAD~1`
         - `ah post embed-results "CONTAMINATED exp-N | <details>"`
+        - `git push origin HEAD` ← push the contaminated result too
 
    IF primary_score <= current_best:
      - Record in results.tsv (status=discard), noting the commit hash
      - `git reset --hard <last kept commit>` to discard the experiment
+     - `git push origin HEAD` ← push after every decision
 
 9. **Periodic maintenance.**
    - Every ~5 experiments: re-mine hard negatives with current best checkpoint.
