@@ -47,8 +47,8 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
     # --model: use sonnet for experiment planning (cheaper, fast)
     cd "$PROJECT_DIR" && claude --print \
         --model claude-sonnet-4-6 \
+        --dangerously-skip-permissions \
         --prompt "Read program.md and resume the experiment loop. Check results.tsv and git log --oneline -20 for current state. If uncommitted changes exist, git checkout . to clean up. Then continue experimenting." \
-        --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \
         --max-turns 200 \
         2>&1 | tee "$log_file" || true
 
