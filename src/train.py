@@ -140,6 +140,27 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     hypothesis = row.get("hypothesis", row.get("sentence2", ""))
                     if label == 0:  # entailment
                         all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
+            elif fmt == "glue_mrpc":
+                # MRPC: paraphrase pairs, label=1 means paraphrase
+                for row in ds:
+                    if row.get("label") == 1:
+                        all_triplets.append({"query": row["sentence1"], "positive": row["sentence2"], "source": ds_id})
+            elif fmt == "glue_qqp":
+                # QQP: duplicate question pairs, label=1 means duplicate
+                for row in ds:
+                    if row.get("label") == 1:
+                        all_triplets.append({"query": row["question1"], "positive": row["question2"], "source": ds_id})
+            elif fmt == "mnli_nonpicture":
+                # MultiNLI: use only non-Flickr genres (government, fiction, telephone, travel, slate, 9/11)
+                # These genres don't overlap with SICK-R/STSBenchmark test sets
+                SAFE_GENRES = {"government", "fiction", "telephone", "travel", "slate", "nineeleven", "letters", "oup"}
+                for row in ds:
+                    label = row.get("label", -1)
+                    genre = row.get("genre", "")
+                    premise = row.get("premise", "")
+                    hypothesis = row.get("hypothesis", "")
+                    if label == 0 and genre in SAFE_GENRES:  # entailment only
+                        all_triplets.append({"query": premise, "positive": hypothesis, "source": ds_id})
             elif fmt == "se_pairs":
                 # StackExchange title-title-pair: title1 and title2 are duplicate question titles
                 for row in ds:
@@ -423,13 +444,17 @@ FULL_TASKS = [
 QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 
 DATASETS = [
+    # MRPC: Microsoft Research Paraphrase Corpus — news sentences (no Flickr)
+    {"id": "glue", "config": "mrpc", "format": "glue_mrpc"},
+    # QQP: Quora Question Pairs — duplicate questions only
+    {"id": "glue", "config": "qqp", "format": "glue_qqp"},
+    # MultiNLI non-picture genres: government, fiction, telephone, travel, slate, 9/11
+    # These genres don't use Flickr captions → no SICK-R/STSBench overlap
+    {"id": "multi_nli", "config": None, "format": "mnli_nonpicture"},
     # StackExchange title pairs: Q&A forum duplicates (no STS overlap)
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
-    # Natural Questions: Wikipedia QA pairs (no STS overlap)
-    {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
     # MS MARCO passages: retrieval pairs, diverse web domain
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
-    # NOTE: all-nli, snli, multi_nli REMOVED — contain Flickr captions that overlap with SICK-R/STSBenchmark
 ]
 
 
@@ -486,9 +511,12 @@ def main():
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
     # For warmup: NLI entailment only
-    # Warmup: use SE pairs (short, similar queries) or all data if not available
-    se_triplets = [t for t in triplets if "stackexchange" in t.get("source", "")]
-    warmup_data = se_triplets if se_triplets else triplets
+    # Warmup: use paraphrase pairs (MRPC + QQP) - short, high-similarity pairs
+    para_triplets = [t for t in triplets if t.get("source") in ("glue", ) or "mrpc" in t.get("source", "") or "qqp" in t.get("source", "")]
+    # Fallback to MultiNLI or all data
+    warmup_data = para_triplets if para_triplets else [t for t in triplets if "mnli" in t.get("source", "") or "multi_nli" in t.get("source", "")]
+    if not warmup_data:
+        warmup_data = triplets
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
