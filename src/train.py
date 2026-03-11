@@ -552,14 +552,21 @@ def main():
     if triplets:
         run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
 
+    # Free MLX memory before hard negative mining (inference mode)
+    try:
+        mx.metal.clear_cache()
+    except Exception:
+        pass
+
     # ---- Stage 3: Hard negative mining ----
     mining_cfg = stages.get("hard_neg_mining", {})
     if triplets:
-        mining_triplets = triplets[:20000]
+        # Use subset for mining to avoid OOM on 64GB system
+        mining_triplets = triplets[:8000]
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
             top_k=int(mining_cfg.get("top_k", 7)),
-            batch_size=128,
+            batch_size=32,
         )
     else:
         triplets_with_negs = triplets
