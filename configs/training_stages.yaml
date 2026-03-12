@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 embedding_dim: 768
 projection_dim: 768
-pooling: "cls"  # mean, cls, weighted
+pooling: "cls_mean"  # mean, cls, cls_mean (concatenate CLS+mean then project)
 max_seq_length: 512
 normalize_embeddings: true
 

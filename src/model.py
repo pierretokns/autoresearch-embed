@@ -151,7 +151,7 @@ class ModernBERTEncoder(nn.Module):
 
 
 class EmbeddingModel(nn.Module):
-    """Wraps ModernBERT encoder with mean pooling, optional projection, and L2 normalization."""
+    """Wraps ModernBERT encoder with pooling, optional projection, and L2 normalization."""
 
     def __init__(self, config: ModernBERTConfig, projection_dim: int | None = None,
                  pooling: str = "mean"):
@@ -160,9 +160,12 @@ class EmbeddingModel(nn.Module):
         self.pooling = pooling
         self.hidden_size = config.hidden_size
 
-        if projection_dim and projection_dim != config.hidden_size:
-            self.projection = nn.Linear(config.hidden_size, projection_dim, bias=False)
-            self.output_dim = projection_dim
+        # cls_mean: concatenate CLS + mean → project to output_dim
+        input_dim = config.hidden_size * 2 if pooling == "cls_mean" else config.hidden_size
+        out_dim = projection_dim if projection_dim else config.hidden_size
+        if projection_dim and (projection_dim != config.hidden_size or pooling == "cls_mean"):
+            self.projection = nn.Linear(input_dim, out_dim, bias=False)
+            self.output_dim = out_dim
         else:
             self.projection = None
             self.output_dim = config.hidden_size
@@ -172,6 +175,14 @@ class EmbeddingModel(nn.Module):
 
         if self.pooling == "cls":
             pooled = hidden[:, 0]
+        elif self.pooling == "cls_mean":
+            cls_vec = hidden[:, 0]
+            if attention_mask is not None:
+                mask = attention_mask[:, :, None].astype(hidden.dtype)
+                mean_vec = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
+            else:
+                mean_vec = mx.mean(hidden, axis=1)
+            pooled = mx.concatenate([cls_vec, mean_vec], axis=-1)
         else:  # mean pooling
             if attention_mask is not None:
                 mask = attention_mask[:, :, None].astype(hidden.dtype)
