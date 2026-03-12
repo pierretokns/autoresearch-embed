@@ -200,6 +200,14 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     # Pair consecutive texts with same label
                     for i in range(0, min(len(texts) - 1, max_rows_per_dataset // len(label_to_texts)), 2):
                         all_triplets.append({"query": texts[i], "positive": texts[i + 1], "source": ds_id})
+            elif fmt == "paws_pairs":
+                # PAWS: sentence1/sentence2 pairs with label=1 meaning paraphrase
+                for row in ds:
+                    if row.get("label") == 1:
+                        s1 = row.get("sentence1", "")
+                        s2 = row.get("sentence2", "")
+                        if s1 and s2:
+                            all_triplets.append({"query": s1, "positive": s2, "source": ds_id})
             elif fmt == "hotpotqa_retrieval":
                 # HotpotQA: question → supporting passage for factual/scientific retrieval training
                 for row in ds:
@@ -508,6 +516,8 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # PAWS: paraphrase pairs (adversarial, exact-synonym duplicates) for pair classification
+    {"id": "google-research-datasets/paws", "config": "labeled_final", "format": "paws_pairs"},
 ]
 
 
