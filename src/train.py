@@ -516,8 +516,6 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
-    # PAWS: paraphrase pairs (adversarial, exact-synonym duplicates) for pair classification
-    {"id": "google-research-datasets/paws", "config": "labeled_final", "format": "paws_pairs"},
 ]
 
 
