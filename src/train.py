@@ -487,6 +487,8 @@ DATASETS = [
     {"id": "fancyzhx/dbpedia_14", "config": None, "format": "label_pairs"},
     # Yahoo Answers Topics: 10 classes for Q&A topic diversity
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
+    # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
+    {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
 ]
 
 
