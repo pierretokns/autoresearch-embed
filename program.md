@@ -36,6 +36,7 @@ Tune these to hit the 5-min target:
 - `scripts/` — READ-ONLY (automation)
 - Never run `git add`/`commit`/`push` directly — `experiment.py` handles it
 - Never run `train.py` directly — always use `experiment.py`
+- **Never create polling loops** (`while true; sleep`, background monitors, `pgrep` watchers). `experiment.py` is synchronous — call it, wait for it to finish, read stdout. Polling loops cause deadlocks.
 - Never import from `src/eval/` in training code (or vice versa)
 
 ## Framework: MLX (Native Apple Silicon)
