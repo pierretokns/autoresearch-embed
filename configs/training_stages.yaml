@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 embedding_dim: 768
 projection_dim: 768
-pooling: "mean"  # mean, cls, weighted
+pooling: "cls"  # mean, cls, weighted
 max_seq_length: 512
 normalize_embeddings: true
 
@@ -22,7 +22,7 @@ stages:
     freeze_encoder_layers: 0  # freeze first N layers
 
   contrastive:
-    duration_minutes: 60
+    duration_minutes: 45
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -40,7 +40,7 @@ stages:
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
-    duration_minutes: 60
+    duration_minutes: 45
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
