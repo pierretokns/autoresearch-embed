@@ -508,10 +508,6 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
-    # MultiNLI: multi-genre NLI with more domain variety (complements SNLI)
-    {"id": "nyu-mll/multi_nli", "config": None, "format": "mnli_nonpicture"},
-    # HotpotQA: multi-hop QA with supporting passages for scientific-style retrieval
-    {"id": "hotpot_qa", "config": "fullwiki", "format": "hotpotqa_retrieval"},
 ]
 
 
