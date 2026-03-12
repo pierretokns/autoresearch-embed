@@ -10,7 +10,7 @@ normalize_embeddings: true
 
 stages:
   warmup:
-    duration_minutes: 30
+    duration_minutes: 15
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
@@ -43,7 +43,7 @@ stages:
     duration_minutes: 45
     data: "all_curated_with_hard_negs"
     loss: "infonce"
-    temperature: 0.05
+    temperature: 0.03
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
