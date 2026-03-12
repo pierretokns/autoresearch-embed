@@ -200,6 +200,25 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     # Pair consecutive texts with same label
                     for i in range(0, min(len(texts) - 1, max_rows_per_dataset // len(label_to_texts)), 2):
                         all_triplets.append({"query": texts[i], "positive": texts[i + 1], "source": ds_id})
+            elif fmt == "hotpotqa_retrieval":
+                # HotpotQA: question → supporting passage for factual/scientific retrieval training
+                for row in ds:
+                    question = row.get("question", "")
+                    context = row.get("context", {})
+                    supporting_facts = row.get("supporting_facts", {})
+                    if not question or not context:
+                        continue
+                    titles = context.get("title", [])
+                    sentences_list = context.get("sentences", [])
+                    sup_titles = set(supporting_facts.get("title", []))
+                    sup_sents = supporting_facts.get("sent_id", [])
+                    for idx, title in enumerate(titles):
+                        if title in sup_titles and idx < len(sentences_list):
+                            sents = sentences_list[idx]
+                            passage = " ".join(sents[:3])
+                            if passage and len(passage) > 30:
+                                all_triplets.append({"query": question, "positive": passage[:400], "source": ds_id})
+                                break
             elif fmt == "yahoo_answers_label_pairs":
                 # Yahoo Answers Topics: group by topic, pair same-topic questions
                 import random as _random
@@ -489,6 +508,10 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # MultiNLI: multi-genre NLI with more domain variety (complements SNLI)
+    {"id": "nyu-mll/multi_nli", "config": None, "format": "mnli_nonpicture"},
+    # HotpotQA: multi-hop QA with supporting passages for scientific-style retrieval
+    {"id": "hotpot_qa", "config": "fullwiki", "format": "hotpotqa_retrieval"},
 ]
 
 
