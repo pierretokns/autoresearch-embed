@@ -4,3 +4,4 @@ e0931b1	27.20	45.71	49.23	68.08	34.12	9.11	8.82	4.06	2.25	exp-3 first clean base
 64cea21	34.66	57.20	54.80	69.92	63.77	10.65	7.73	12.95	4.71	exp-12: add ag_news same-label pairs for clustering + finetune temp 0.02→0.05; target clustering(9%→15%)
 7a8f211	38.44	59.70	58.09	73.32	69.36	11.68	10.58	20.94	7.55	exp-13: add DBpedia-14 (14 classes) + Yahoo Answers (10 classes) for finer clustering; target 20News/Reddit cluster improvement
 1537540	38.84	62.60	57.96	74.37	71.93	14.12	11.43	16.03	7.76	exp-14: add SNLI entailment pairs for STS signal; DBpedia+Yahoo+SNLI; target STS>65, primary>40
+81f881a	40.97	59.03	59.37	73.50	81.55	14.00	11.00	24.26	10.45	exp-16: extend training 30→45min (contrastive+finetune); same exp-14 data (SNLI+DBpedia+Yahoo); target primary>40
