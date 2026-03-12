@@ -53,7 +53,7 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
         --model claude-sonnet-4-6 \
         --dangerously-skip-permissions \
         --max-turns 200 \
-        "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. Never stop." \
+        "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. CRITICAL: experiment.py is synchronous — just call it and wait for it to return. NEVER create while/sleep/pgrep polling loops or background monitoring scripts. They deadlock. Never stop." \
         2>&1 | tee "$log_file" || true
 
     restart_count=$((restart_count + 1))
