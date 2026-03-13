@@ -6,3 +6,4 @@ e0931b1	27.20	45.71	49.23	68.08	34.12	9.11	8.82	4.06	2.25	exp-3 first clean base
 1537540	38.84	62.60	57.96	74.37	71.93	14.12	11.43	16.03	7.76	exp-14: add SNLI entailment pairs for STS signal; DBpedia+Yahoo+SNLI; target STS>65, primary>40
 81f881a	40.97	59.03	59.37	73.50	81.55	14.00	11.00	24.26	10.45	exp-16: extend training 30→45min (contrastive+finetune); same exp-14 data (SNLI+DBpedia+Yahoo); target primary>40
 bb845eb	42.05	64.25	64.83	61.60	59.68	20.29	20.15	29.29	14.17	exp-18: CLS pooling instead of mean pooling; 45+45min; exp-14 data; target SciFact+STS improvement
+3a5d519	43.84	62.45	62.56	76.06	83.61	15.30	18.07	28.34	10.19	exp-32: reduce hard_neg_weight 2.0→1.5 in fine-tuning; CLS pooling; std InfoNCE; top_k=7; target clustering improvement while retaining retrieval
