@@ -504,8 +504,6 @@ QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 DATASETS = [
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
-    # Quora duplicate question pairs: 149K pairs, boosts pair classification (Sprint/Twitter)
-    {"id": "sentence-transformers/quora-duplicates", "config": "pair", "format": "triplet"},
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
     # Reddit title-body pairs: high topic diversity → better clustering signal
@@ -633,7 +631,7 @@ def main():
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "") or "quora" in t.get("source", "")]
+    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
     if not warmup_data:
         warmup_data = triplets
 

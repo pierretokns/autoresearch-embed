@@ -48,7 +48,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
-    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs
+    hard_neg_weight: 3.0  # weight hard negs vs in-batch negs (was 2.0; higher = stronger hard neg signal)
 
 optimizer:
   type: "adamw"
