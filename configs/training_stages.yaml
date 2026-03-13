@@ -1,9 +1,9 @@
 # Multi-stage contrastive training configuration
 # All durations are wall-clock minutes
 
-base_model: "answerdotai/ModernBERT-large"
-embedding_dim: 1024
-projection_dim: 1024
+base_model: "answerdotai/ModernBERT-base"
+embedding_dim: 768
+projection_dim: 768
 pooling: "cls"  # mean, cls, cls_mean (concatenate CLS+mean then project)
 max_seq_length: 512
 normalize_embeddings: true
@@ -14,7 +14,7 @@ stages:
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
-    learning_rate: 6.0e-5
+    learning_rate: 1.0e-4
     lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
     batch_size: 64
@@ -25,8 +25,8 @@ stages:
     duration_minutes: 45
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05
-    learning_rate: 3.0e-5
+    temperature: 0.07
+    learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64
@@ -36,7 +36,7 @@ stages:
   hard_neg_mining:
     duration_minutes: 5
     top_k: 7
-    batch_size: 64  # inference only
+    batch_size: 128  # inference only, can be larger
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
@@ -44,7 +44,7 @@ stages:
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 6.0e-6
+    learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
@@ -57,5 +57,5 @@ optimizer:
   weight_decay: 0.01
 
 memory:
-  max_peak_gb: 60
+  max_peak_gb: 55
   gradient_accumulation_steps: 4
