@@ -46,16 +46,11 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
 # ---- MLX Loss Functions ----
 
 def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05) -> mx.array:
-    """Symmetric InfoNCE loss with in-batch negatives (SimCSE-style bidirectional)."""
+    """InfoNCE loss with in-batch negatives (query→positive direction)."""
     sim = mx.matmul(query_emb, positive_emb.T) / temperature
     labels = mx.arange(sim.shape[0])
-    # Forward: query→positive
-    lse_fwd = mx.logsumexp(sim, axis=1, keepdims=True)
-    loss_fwd = -mx.mean((sim - lse_fwd)[mx.arange(sim.shape[0]), labels])
-    # Backward: positive→query (transpose)
-    lse_bwd = mx.logsumexp(sim.T, axis=1, keepdims=True)
-    loss_bwd = -mx.mean((sim.T - lse_bwd)[mx.arange(sim.shape[0]), labels])
-    return (loss_fwd + loss_bwd) * 0.5
+    lse = mx.logsumexp(sim, axis=1, keepdims=True)
+    return -mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels])
 
 
 def infonce_loss_with_hard_negs(
@@ -521,6 +516,8 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # HotpotQA: multi-hop question → supporting passage for factual retrieval training
+    {"id": "hotpot_qa", "config": "fullwiki", "format": "hotpotqa_retrieval"},
 ]
 
 
@@ -680,7 +677,7 @@ def main():
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
-        mining_triplets = triplets[:8000]
+        mining_triplets = triplets[:12000]
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
             top_k=int(mining_cfg.get("top_k", 7)),
