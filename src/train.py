@@ -504,6 +504,8 @@ QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
 DATASETS = [
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
     {"id": "sentence-transformers/stackexchange-duplicates", "config": "title-title-pair", "format": "se_pairs"},
+    # Quora duplicate question pairs: 149K pairs, boosts pair classification (Sprint/Twitter)
+    {"id": "sentence-transformers/quora-duplicates", "config": "pair", "format": "triplet"},
     {"id": "ms_marco", "config": "v2.1", "format": "ms_marco"},
     {"id": "sentence-transformers/natural-questions", "config": None, "format": "nq_pairs"},
     # Reddit title-body pairs: high topic diversity → better clustering signal
@@ -516,8 +518,6 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
-    # HotpotQA: multi-hop question → supporting passage for factual retrieval training
-    {"id": "hotpot_qa", "config": "fullwiki", "format": "hotpotqa_retrieval"},
 ]
 
 
@@ -633,7 +633,7 @@ def main():
 
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
+    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "") or "quora" in t.get("source", "")]
     if not warmup_data:
         warmup_data = triplets
 
@@ -677,7 +677,7 @@ def main():
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
-        mining_triplets = triplets[:12000]
+        mining_triplets = triplets[:8000]
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
             top_k=int(mining_cfg.get("top_k", 7)),
