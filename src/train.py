@@ -551,12 +551,12 @@ def main():
         print(f"wandb init failed (non-fatal): {e}")
         wandb = None
 
-    from src.model import ModernBERTConfig, EmbeddingModel, load_from_safetensors
+    from src.model import get_model_config, EmbeddingModel, load_from_safetensors
 
     model_name = config.get("base_model", "answerdotai/ModernBERT-base")
     print(f"Loading base model: {model_name}")
 
-    bert_config = ModernBERTConfig()
+    bert_config = get_model_config(model_name)
     model = EmbeddingModel(
         bert_config,
         projection_dim=config.get("projection_dim"),
@@ -676,10 +676,11 @@ def main():
             load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
         mining_triplets = triplets[:8000]
+        mining_bs = int(mining_cfg.get("batch_size", 32))
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
             top_k=int(mining_cfg.get("top_k", 7)),
-            batch_size=32,
+            batch_size=mining_bs,
         )
         save_stage_checkpoint("mining")
     else:

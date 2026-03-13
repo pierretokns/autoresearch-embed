@@ -32,6 +32,18 @@ class ModernBERTConfig:
     attention_dropout: float = 0.0
 
 
+def get_model_config(model_id: str) -> ModernBERTConfig:
+    """Return the correct ModernBERTConfig for a given model ID."""
+    if "large" in model_id.lower():
+        return ModernBERTConfig(
+            hidden_size=1024,
+            num_hidden_layers=28,
+            num_attention_heads=16,
+            intermediate_size=2624,
+        )
+    return ModernBERTConfig()
+
+
 class ModernBERTAttention(nn.Module):
     """Multi-head attention with fused QKV and alternating local/global attention."""
 
