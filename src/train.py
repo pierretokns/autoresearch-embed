@@ -46,11 +46,16 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
 # ---- MLX Loss Functions ----
 
 def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05) -> mx.array:
-    """InfoNCE loss with in-batch negatives."""
+    """Symmetric InfoNCE loss with in-batch negatives (SimCSE-style bidirectional)."""
     sim = mx.matmul(query_emb, positive_emb.T) / temperature
     labels = mx.arange(sim.shape[0])
-    log_softmax = sim - mx.logsumexp(sim, axis=1, keepdims=True)
-    return -mx.mean(log_softmax[mx.arange(sim.shape[0]), labels])
+    # Forward: query→positive
+    lse_fwd = mx.logsumexp(sim, axis=1, keepdims=True)
+    loss_fwd = -mx.mean((sim - lse_fwd)[mx.arange(sim.shape[0]), labels])
+    # Backward: positive→query (transpose)
+    lse_bwd = mx.logsumexp(sim.T, axis=1, keepdims=True)
+    loss_bwd = -mx.mean((sim.T - lse_bwd)[mx.arange(sim.shape[0]), labels])
+    return (loss_fwd + loss_bwd) * 0.5
 
 
 def infonce_loss_with_hard_negs(
