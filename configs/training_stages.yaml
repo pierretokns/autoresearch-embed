@@ -14,10 +14,10 @@ stages:
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
-    learning_rate: 1.0e-4
+    learning_rate: 6.0e-5
     lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
-    batch_size: 32
+    batch_size: 64
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
 
@@ -26,10 +26,10 @@ stages:
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 5.0e-5
+    learning_rate: 3.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 32
+    batch_size: 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
 
@@ -44,10 +44,10 @@ stages:
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 1.0e-5
+    learning_rate: 6.0e-6
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 16
+    batch_size: 32
     hard_neg_weight: 2.0  # weight hard negs vs in-batch negs
 
 optimizer:
