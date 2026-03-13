@@ -35,7 +35,7 @@ stages:
 
   hard_neg_mining:
     duration_minutes: 5
-    top_k: 10
+    top_k: 7
     batch_size: 128  # inference only, can be larger
     min_similarity: 0.3  # ignore very dissimilar passages
 
@@ -48,7 +48,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
-    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs
+    hard_neg_weight: 1.5  # weight hard negs vs in-batch negs
 
 optimizer:
   type: "adamw"
