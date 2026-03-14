@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 embedding_dim: 768
 projection_dim: 768
-pooling: "latent_attn"  # mean, cls, cls_mean (concatenate CLS+mean then project), latent_attn
+pooling: "cls"  # mean, cls, cls_mean (concatenate CLS+mean then project), latent_attn
 max_seq_length: 512
 normalize_embeddings: true
 
