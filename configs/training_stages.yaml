@@ -29,13 +29,13 @@ stages:
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 128
+    batch_size: 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
 
   hard_neg_mining:
     duration_minutes: 5
-    top_k: 7
+    top_k: 14
     batch_size: 128  # inference only, can be larger
     min_similarity: 0.3  # ignore very dissimilar passages
 
