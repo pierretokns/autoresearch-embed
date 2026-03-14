@@ -516,6 +516,8 @@ DATASETS = [
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
     # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
+    {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
 ]
 
 
