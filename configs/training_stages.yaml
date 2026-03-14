@@ -26,7 +26,7 @@ stages:
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 5.0e-5
+    learning_rate: 8.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64
@@ -46,7 +46,7 @@ stages:
     temperature: 0.05
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
-    warmup_ratio: 0.1
+    warmup_ratio: 0.0
     batch_size: 32
     hard_neg_weight: 1.0  # weight hard negs vs in-batch negs
 
