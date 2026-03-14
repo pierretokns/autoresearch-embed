@@ -4,13 +4,13 @@
 base_model: "answerdotai/ModernBERT-base"
 embedding_dim: 768
 projection_dim: 768
-pooling: "cls"  # mean, cls, cls_mean (concatenate CLS+mean then project), latent_attn
+pooling: "latent_attn"  # mean, cls, cls_mean (concatenate CLS+mean then project), latent_attn
 max_seq_length: 512
 normalize_embeddings: true
 
 stages:
   warmup:
-    duration_minutes: 2
+    duration_minutes: 15
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
@@ -22,7 +22,7 @@ stages:
     freeze_encoder_layers: 0  # freeze first N layers
 
   contrastive:
-    duration_minutes: 3
+    duration_minutes: 45
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -40,7 +40,7 @@ stages:
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
-    duration_minutes: 2
+    duration_minutes: 45
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
