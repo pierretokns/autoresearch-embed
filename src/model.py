@@ -162,6 +162,39 @@ class ModernBERTEncoder(nn.Module):
         return x
 
 
+class LatentAttentionPooling(nn.Module):
+    """
+    Latent attention pooling: trainable query vectors attend over encoder output.
+    Used by NV-Embed-v2 (MTEB #1). A set of K latent queries cross-attend the
+    token representations; the resulting K vectors are mean-pooled to one embedding.
+    """
+
+    def __init__(self, hidden_size: int, num_latents: int = 4, num_heads: int = 8):
+        super().__init__()
+        self.num_latents = num_latents
+        self.hidden_size = hidden_size
+        # Trainable latent queries: (1, K, H)
+        self.latents = mx.zeros((1, num_latents, hidden_size))
+        self.attn = nn.MultiHeadAttention(hidden_size, num_heads, bias=False)
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def __call__(self, hidden: mx.array, attention_mask: mx.array | None = None) -> mx.array:
+        B = hidden.shape[0]
+        # Expand latents to batch
+        queries = mx.broadcast_to(self.latents, (B, self.num_latents, self.hidden_size))
+        # Key/value mask: additive mask (B, 1, K, T) from attention_mask
+        if attention_mask is not None:
+            kv_mask = mx.where(attention_mask[:, None, None, :] == 0,
+                               mx.array(float("-inf")), mx.array(0.0))
+        else:
+            kv_mask = None
+        # Cross-attention: queries attend over hidden states
+        out = self.attn(queries, hidden, hidden, mask=kv_mask)  # (B, K, H)
+        out = self.norm(out)
+        # Mean-pool over latents → (B, H)
+        return mx.mean(out, axis=1)
+
+
 class EmbeddingModel(nn.Module):
     """Wraps ModernBERT encoder with pooling, optional projection, and L2 normalization."""
 
@@ -171,6 +204,12 @@ class EmbeddingModel(nn.Module):
         self.encoder = ModernBERTEncoder(config)
         self.pooling = pooling
         self.hidden_size = config.hidden_size
+
+        # Latent attention pooling module (initialized if needed)
+        if pooling == "latent_attn":
+            self.latent_pool = LatentAttentionPooling(config.hidden_size)
+        else:
+            self.latent_pool = None
 
         # cls_mean: concatenate CLS + mean → project to output_dim
         input_dim = config.hidden_size * 2 if pooling == "cls_mean" else config.hidden_size
@@ -185,7 +224,9 @@ class EmbeddingModel(nn.Module):
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None) -> mx.array:
         hidden = self.encoder(input_ids, attention_mask)  # (B, T, H)
 
-        if self.pooling == "cls":
+        if self.pooling == "latent_attn":
+            pooled = self.latent_pool(hidden, attention_mask)
+        elif self.pooling == "cls":
             pooled = hidden[:, 0]
         elif self.pooling == "cls_mean":
             cls_vec = hidden[:, 0]
