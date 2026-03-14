@@ -22,7 +22,7 @@ stages:
     freeze_encoder_layers: 0  # freeze first N layers
 
   contrastive:
-    duration_minutes: 45
+    duration_minutes: 60
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -44,7 +44,7 @@ stages:
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 3.0e-5
+    learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
