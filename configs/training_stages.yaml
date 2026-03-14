@@ -31,7 +31,7 @@ stages:
     warmup_ratio: 0.05
     batch_size: 64
     negatives: "in_batch_plus_explicit"
-    source_stratification: false  # fill batches from single source
+    source_stratification: true  # fill batches from single source
 
   hard_neg_mining:
     duration_minutes: 5
@@ -46,7 +46,7 @@ stages:
     temperature: 0.05
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
-    warmup_ratio: 0.0
+    warmup_ratio: 0.1
     batch_size: 32
     hard_neg_weight: 1.0  # weight hard negs vs in-batch negs
 
