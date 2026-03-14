@@ -143,7 +143,8 @@ class ModernBERTEncoder(nn.Module):
         self.layers = [ModernBERTLayer(config, i) for i in range(config.num_hidden_layers)]
         self.final_norm = nn.RMSNorm(config.hidden_size)
 
-    def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None) -> mx.array:
+    def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None,
+                 return_all_layers: bool = False):
         x = self.tok_embeddings(input_ids)
         x = self.embedding_norm(x)
 
@@ -155,11 +156,42 @@ class ModernBERTEncoder(nn.Module):
         else:
             mask = None
 
-        for layer in self.layers:
-            x = layer(x, mask=mask)
+        if return_all_layers:
+            all_hidden = []
+            for layer in self.layers:
+                x = layer(x, mask=mask)
+                all_hidden.append(x)
+            # Apply final norm only to last layer
+            all_hidden[-1] = self.final_norm(all_hidden[-1])
+            return all_hidden  # list of (B, T, H), length = num_layers
+        else:
+            for layer in self.layers:
+                x = layer(x, mask=mask)
+            x = self.final_norm(x)
+            return x
 
-        x = self.final_norm(x)
-        return x
+
+class LayerWeightedPooling(nn.Module):
+    """
+    Multi-layer weighted pooling: learn a softmax-weighted combination of CLS tokens
+    from all encoder layers. Each layer captures different semantic/syntactic info.
+    Research shows middle layers often outperform last layer for STS tasks.
+    """
+
+    def __init__(self, num_layers: int):
+        super().__init__()
+        # Learnable logits for each layer: softmax → weights
+        self.layer_logits = mx.zeros((num_layers,))
+
+    def __call__(self, all_hidden: list) -> mx.array:
+        # all_hidden: list of (B, T, H), length = num_layers
+        # Extract CLS token from each layer
+        cls_per_layer = mx.stack([h[:, 0] for h in all_hidden], axis=1)  # (B, L, H)
+        # Compute softmax weights over layers
+        weights = mx.softmax(self.layer_logits, axis=0)  # (L,)
+        # Weighted sum: (B, L, H) * (L,) → (B, H)
+        pooled = mx.sum(cls_per_layer * weights[None, :, None], axis=1)
+        return pooled
 
 
 class LatentAttentionPooling(nn.Module):
@@ -205,11 +237,15 @@ class EmbeddingModel(nn.Module):
         self.pooling = pooling
         self.hidden_size = config.hidden_size
 
-        # Latent attention pooling module (initialized if needed)
+        # Pooling modules (initialized if needed)
         if pooling == "latent_attn":
             self.latent_pool = LatentAttentionPooling(config.hidden_size)
         else:
             self.latent_pool = None
+        if pooling == "layer_weighted":
+            self.layer_pool = LayerWeightedPooling(config.num_hidden_layers)
+        else:
+            self.layer_pool = None
 
         # cls_mean: concatenate CLS + mean → project to output_dim
         input_dim = config.hidden_size * 2 if pooling == "cls_mean" else config.hidden_size
@@ -222,26 +258,29 @@ class EmbeddingModel(nn.Module):
             self.output_dim = config.hidden_size
 
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None) -> mx.array:
-        hidden = self.encoder(input_ids, attention_mask)  # (B, T, H)
-
-        if self.pooling == "latent_attn":
-            pooled = self.latent_pool(hidden, attention_mask)
-        elif self.pooling == "cls":
-            pooled = hidden[:, 0]
-        elif self.pooling == "cls_mean":
-            cls_vec = hidden[:, 0]
-            if attention_mask is not None:
-                mask = attention_mask[:, :, None].astype(hidden.dtype)
-                mean_vec = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
-            else:
-                mean_vec = mx.mean(hidden, axis=1)
-            pooled = mx.concatenate([cls_vec, mean_vec], axis=-1)
-        else:  # mean pooling
-            if attention_mask is not None:
-                mask = attention_mask[:, :, None].astype(hidden.dtype)
-                pooled = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
-            else:
-                pooled = mx.mean(hidden, axis=1)
+        if self.pooling == "layer_weighted":
+            all_hidden = self.encoder(input_ids, attention_mask, return_all_layers=True)
+            pooled = self.layer_pool(all_hidden)
+        else:
+            hidden = self.encoder(input_ids, attention_mask)  # (B, T, H)
+            if self.pooling == "latent_attn":
+                pooled = self.latent_pool(hidden, attention_mask)
+            elif self.pooling == "cls":
+                pooled = hidden[:, 0]
+            elif self.pooling == "cls_mean":
+                cls_vec = hidden[:, 0]
+                if attention_mask is not None:
+                    mask = attention_mask[:, :, None].astype(hidden.dtype)
+                    mean_vec = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
+                else:
+                    mean_vec = mx.mean(hidden, axis=1)
+                pooled = mx.concatenate([cls_vec, mean_vec], axis=-1)
+            else:  # mean pooling
+                if attention_mask is not None:
+                    mask = attention_mask[:, :, None].astype(hidden.dtype)
+                    pooled = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
+                else:
+                    pooled = mx.mean(hidden, axis=1)
 
         if self.projection is not None:
             pooled = self.projection(pooled)
