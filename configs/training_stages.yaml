@@ -35,7 +35,7 @@ stages:
 
   hard_neg_mining:
     duration_minutes: 5
-    top_k: 14
+    top_k: 7
     batch_size: 128  # inference only, can be larger
     min_similarity: 0.3  # ignore very dissimilar passages
 
@@ -44,7 +44,7 @@ stages:
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 1.0e-5
+    learning_rate: 3.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
