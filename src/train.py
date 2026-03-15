@@ -45,12 +45,18 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
 
 # ---- MLX Loss Functions ----
 
-def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05) -> mx.array:
-    """InfoNCE loss with in-batch negatives (query→positive direction)."""
+def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05,
+                 symmetric: bool = False) -> mx.array:
+    """InfoNCE loss with in-batch negatives. symmetric=True adds positive→query direction."""
     sim = mx.matmul(query_emb, positive_emb.T) / temperature
     labels = mx.arange(sim.shape[0])
     lse = mx.logsumexp(sim, axis=1, keepdims=True)
-    return -mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels])
+    loss_fwd = -mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels])
+    if symmetric:
+        lse_bwd = mx.logsumexp(sim.T, axis=1, keepdims=True)
+        loss_bwd = -mx.mean((sim.T - lse_bwd)[mx.arange(sim.shape[1]), labels])
+        return (loss_fwd + loss_bwd) * 0.5
+    return loss_fwd
 
 
 def infonce_loss_with_hard_negs(
@@ -300,6 +306,7 @@ def run_training_stage(
     temperature = float(stage_cfg.get("temperature", 0.05))
     max_seq_len = 256
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
+    symmetric = bool(stage_cfg.get("symmetric", False))
 
     stage_start = time.time()
     step = 0
@@ -319,7 +326,7 @@ def run_training_stage(
             return infonce_loss_with_hard_negs(q_emb, p_emb, n_emb,
                                                temperature=temperature,
                                                hard_neg_weight=hard_neg_weight)
-        return infonce_loss(q_emb, p_emb, temperature=temperature)
+        return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric)
 
     loss_grad_fn = nn.value_and_grad(model, loss_fn)
 
@@ -536,8 +543,6 @@ DATASETS = [
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
-    # PAWS: paraphrase adversarial pairs for fine-grained semantic similarity (fixes SICK-R regression)
-    {"id": "google-research-datasets/paws", "config": "labeled_final", "format": "paws_pairs"},
 ]
 
 

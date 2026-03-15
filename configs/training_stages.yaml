@@ -32,6 +32,7 @@ stages:
     batch_size: 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
+    symmetric: true  # bidirectional InfoNCE: both query→positive and positive→query
 
   hard_neg_mining:
     duration_minutes: 5
