@@ -331,6 +331,27 @@ def run_training_stage(
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
+    lr_schedule = stage_cfg.get("lr_schedule", "constant")
+    base_lr = float(stage_cfg.get("learning_rate", 5e-5))
+    warmup_ratio = float(stage_cfg.get("warmup_ratio", 0.0))
+
+    # Estimate total steps for LR scheduling (approx, will reuse across epochs)
+    steps_per_epoch = max(1, len(triplets) // batch_size)
+    epochs_estimate = max(1, int(duration_s / (steps_per_epoch * 1.1)))  # rough estimate
+    total_steps_estimate = steps_per_epoch * epochs_estimate
+    warmup_steps = int(total_steps_estimate * warmup_ratio)
+
+    def get_lr(step: int) -> float:
+        if lr_schedule == "cosine_decay":
+            if step < warmup_steps and warmup_steps > 0:
+                return base_lr * step / warmup_steps
+            progress = (step - warmup_steps) / max(1, total_steps_estimate - warmup_steps)
+            return base_lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+        elif lr_schedule == "linear_warmup_constant":
+            if step < warmup_steps and warmup_steps > 0:
+                return base_lr * step / warmup_steps
+            return base_lr
+        return base_lr  # constant
 
     stage_start = time.time()
     step = 0
@@ -394,6 +415,10 @@ def run_training_stage(
 
             # Grad clipping
             grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
+
+            # Update LR according to schedule
+            if lr_schedule != "constant":
+                optimizer.learning_rate = get_lr(step)
 
             optimizer.update(model, grads)
             mx.eval(model.parameters(), optimizer.state, loss)
