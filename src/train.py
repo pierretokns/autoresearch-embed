@@ -244,6 +244,24 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     _random.shuffle(texts)
                     for i in range(0, min(len(texts) - 1, max_rows_per_dataset // max(len(label_to_texts), 1)), 2):
                         all_triplets.append({"query": texts[i], "positive": texts[i + 1], "source": ds_id})
+            elif fmt == "triviaqa_retrieval":
+                # TriviaQA: question → answer entity pair for factual/retrieval training
+                for row in ds:
+                    question = row.get("question", "")
+                    answer = row.get("answer", {})
+                    answer_value = answer.get("value", "") if isinstance(answer, dict) else ""
+                    # Also try search_results for longer context
+                    search_results = row.get("search_results", {})
+                    if question and answer_value and len(answer_value) > 2:
+                        # Pair question with its canonical answer
+                        all_triplets.append({"query": question, "positive": str(answer_value)[:400], "source": ds_id})
+                        # Also pair with first relevant search result excerpt if available
+                        if isinstance(search_results, dict):
+                            snippets = search_results.get("search_context", [])
+                            if snippets:
+                                snippet = str(snippets[0])[:400]
+                                if len(snippet) > 50:
+                                    all_triplets.append({"query": question, "positive": snippet, "source": ds_id})
             elif fmt == "pair_score":
                 cols = ds.column_names
                 s1_col = next((c for c in cols if c in ("sentence1", "text1", "anchor")), cols[0])
@@ -518,6 +536,8 @@ DATASETS = [
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
+    # TriviaQA: trivia question → canonical answer + search context pairs for factual retrieval
+    {"id": "trivia_qa", "config": "rc", "format": "triviaqa_retrieval"},
 ]
 
 

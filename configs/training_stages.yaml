@@ -22,7 +22,7 @@ stages:
     freeze_encoder_layers: 0  # freeze first N layers
 
   contrastive:
-    duration_minutes: 90
+    duration_minutes: 60
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
