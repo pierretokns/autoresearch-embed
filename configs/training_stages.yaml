@@ -40,7 +40,7 @@ stages:
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
-    duration_minutes: 45
+    duration_minutes: 5
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
