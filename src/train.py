@@ -59,6 +59,29 @@ def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float
     return loss_fwd
 
 
+def matryoshka_infonce_loss(
+    query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05,
+    dims: list = None,
+) -> mx.array:
+    """Matryoshka InfoNCE: compute loss at multiple truncated dimensions and average.
+    Forces the model to encode the most important info in the first few dims.
+    """
+    if dims is None:
+        dims = [768, 512, 256, 128, 64]
+    total_loss = mx.array(0.0)
+    for d in dims:
+        q_trunc = query_emb[:, :d]
+        p_trunc = positive_emb[:, :d]
+        # Re-normalize truncated embeddings
+        q_trunc = q_trunc / mx.sqrt(mx.sum(q_trunc * q_trunc, axis=-1, keepdims=True) + 1e-12)
+        p_trunc = p_trunc / mx.sqrt(mx.sum(p_trunc * p_trunc, axis=-1, keepdims=True) + 1e-12)
+        sim = mx.matmul(q_trunc, p_trunc.T) / temperature
+        labels = mx.arange(sim.shape[0])
+        lse = mx.logsumexp(sim, axis=1, keepdims=True)
+        total_loss = total_loss + (-mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels]))
+    return total_loss / len(dims)
+
+
 def infonce_loss_with_hard_negs(
     query_emb: mx.array, positive_emb: mx.array, hard_neg_emb: mx.array,
     temperature: float = 0.05, hard_neg_weight: float = 2.0,
@@ -307,6 +330,7 @@ def run_training_stage(
     max_seq_len = 256
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
+    use_matryoshka = bool(stage_cfg.get("matryoshka", False))
 
     stage_start = time.time()
     step = 0
@@ -326,6 +350,8 @@ def run_training_stage(
             return infonce_loss_with_hard_negs(q_emb, p_emb, n_emb,
                                                temperature=temperature,
                                                hard_neg_weight=hard_neg_weight)
+        if use_matryoshka:
+            return matryoshka_infonce_loss(q_emb, p_emb, temperature=temperature)
         return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric)
 
     loss_grad_fn = nn.value_and_grad(model, loss_fn)
