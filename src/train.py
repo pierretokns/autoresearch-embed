@@ -536,6 +536,8 @@ DATASETS = [
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
+    # PAWS: paraphrase adversarial pairs for fine-grained semantic similarity (fixes SICK-R regression)
+    {"id": "google-research-datasets/paws", "config": "labeled_final", "format": "paws_pairs"},
 ]
 
 
