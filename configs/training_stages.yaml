@@ -10,7 +10,7 @@ normalize_embeddings: true
 
 stages:
   warmup:
-    duration_minutes: 15
+    duration_minutes: 20
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
@@ -32,7 +32,6 @@ stages:
     batch_size: 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
-    matryoshka: true  # MRL: compute InfoNCE at dims [768,512,256,128,64]
 
   hard_neg_mining:
     duration_minutes: 5
