@@ -536,8 +536,6 @@ DATASETS = [
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
-    # TriviaQA: trivia question → canonical answer + search context pairs for factual retrieval
-    {"id": "trivia_qa", "config": "rc", "format": "triviaqa_retrieval"},
 ]
 
 
