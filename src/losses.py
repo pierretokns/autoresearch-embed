@@ -96,7 +96,7 @@ def triplet_loss(
     Returns:
         scalar loss
     """
-    pos_dist = mx.sqrt(mx.sum((anchor - positive) ** 2, axis=-1) + 1e-12)
-    neg_dist = mx.sqrt(mx.sum((anchor - negative) ** 2, axis=-1) + 1e-12)
+    pos_dist = mx.sqrt(mx.sum((anchor - positive) ** 2, axis=-1) + 1e-8)
+    neg_dist = mx.sqrt(mx.sum((anchor - negative) ** 2, axis=-1) + 1e-8)
     loss = mx.maximum(pos_dist - neg_dist + margin, mx.array(0.0))
     return mx.mean(loss)

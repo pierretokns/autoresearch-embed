@@ -2,7 +2,7 @@
 # All durations are wall-clock minutes
 
 base_model: "answerdotai/ModernBERT-base"
-embedding_dim: 768
+# embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
 pooling: "cls"  # mean, cls, cls_mean, latent_attn, layer_weighted
 max_seq_length: 512
@@ -31,7 +31,7 @@ stages:
     warmup_ratio: 0.05
     batch_size: 64
     negatives: "in_batch_plus_explicit"
-    source_stratification: true  # fill batches from single source
+    source_stratification: false  # mixed batches for diverse in-batch negatives
 
   hard_neg_mining:
     duration_minutes: 5
@@ -48,7 +48,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
-    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs (>1.0 enables explicit hard neg loss)
+    hard_neg_weight: 1.0  # weight hard negs vs in-batch negs
 
 optimizer:
   type: "adamw"

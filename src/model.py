@@ -206,14 +206,15 @@ class LatentAttentionPooling(nn.Module):
         self.num_latents = num_latents
         self.hidden_size = hidden_size
         # Trainable latent queries: (1, K, H)
-        self.latents = mx.zeros((1, num_latents, hidden_size))
+        scale = hidden_size ** -0.5
+        self.latents = scale * mx.random.normal((1, num_latents, hidden_size))
         self.attn = nn.MultiHeadAttention(hidden_size, num_heads, bias=False)
         self.norm = nn.LayerNorm(hidden_size)
 
     def __call__(self, hidden: mx.array, attention_mask: mx.array | None = None) -> mx.array:
         B = hidden.shape[0]
-        # Expand latents to batch
-        queries = mx.broadcast_to(self.latents, (B, self.num_latents, self.hidden_size))
+        # Expand latents to batch (tile ensures proper gradient flow)
+        queries = mx.tile(self.latents, (B, 1, 1))
         # Key/value mask: additive mask (B, 1, K, T) from attention_mask
         if attention_mask is not None:
             kv_mask = mx.where(attention_mask[:, None, None, :] == 0,
@@ -231,11 +232,12 @@ class EmbeddingModel(nn.Module):
     """Wraps ModernBERT encoder with pooling, optional projection, and L2 normalization."""
 
     def __init__(self, config: ModernBERTConfig, projection_dim: int | None = None,
-                 pooling: str = "mean"):
+                 pooling: str = "mean", normalize: bool = True):
         super().__init__()
         self.encoder = ModernBERTEncoder(config)
         self.pooling = pooling
         self.hidden_size = config.hidden_size
+        self.normalize = normalize
 
         # Pooling modules (initialized if needed)
         if pooling == "latent_attn":
@@ -286,8 +288,9 @@ class EmbeddingModel(nn.Module):
             pooled = self.projection(pooled)
 
         # L2 normalize
-        norms = mx.sqrt(mx.sum(pooled * pooled, axis=-1, keepdims=True) + 1e-12)
-        pooled = pooled / norms
+        if self.normalize:
+            norms = mx.sqrt(mx.sum(pooled * pooled, axis=-1, keepdims=True) + 1e-8)
+            pooled = pooled / norms
         return pooled
 
     def encode_sentences(self, sentences: list[str], tokenizer, batch_size: int = 64,

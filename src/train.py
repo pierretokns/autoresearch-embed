@@ -74,8 +74,8 @@ def matryoshka_infonce_loss(
         q_trunc = query_emb[:, :d]
         p_trunc = positive_emb[:, :d]
         # Re-normalize truncated embeddings
-        q_trunc = q_trunc / mx.sqrt(mx.sum(q_trunc * q_trunc, axis=-1, keepdims=True) + 1e-12)
-        p_trunc = p_trunc / mx.sqrt(mx.sum(p_trunc * p_trunc, axis=-1, keepdims=True) + 1e-12)
+        q_trunc = q_trunc / mx.sqrt(mx.sum(q_trunc * q_trunc, axis=-1, keepdims=True) + 1e-8)
+        p_trunc = p_trunc / mx.sqrt(mx.sum(p_trunc * p_trunc, axis=-1, keepdims=True) + 1e-8)
         sim = mx.matmul(q_trunc, p_trunc.T) / temperature
         labels = mx.arange(sim.shape[0])
         lse = mx.logsumexp(sim, axis=1, keepdims=True)
@@ -323,12 +323,14 @@ def run_training_stage(
     stage_cfg: dict,
     optimizer,
     stage_name: str,
+    max_seq_length: int = 256,
+    grad_accum_steps: int = 1,
 ):
     """Run one training stage for the configured duration using MLX value_and_grad."""
     duration_s = float(stage_cfg.get("duration_minutes", 10)) * 60
     batch_size = int(stage_cfg.get("batch_size", 128))
     temperature = float(stage_cfg.get("temperature", 0.05))
-    max_seq_len = 256
+    max_seq_len = max_seq_length
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
@@ -368,6 +370,8 @@ def run_training_stage(
     stage_start = time.time()
     step = 0
     total_loss = 0.0
+    accum_grads = None
+    accum_count = 0
 
     print(f"\n=== Stage: {stage_name} ({stage_cfg.get('duration_minutes', 10)} min) ===")
 
@@ -418,7 +422,7 @@ def run_training_stage(
 
             # Check for hard negatives
             has_hard_negs = any(t.get("negatives") for t in batch)
-            if has_hard_negs and hard_neg_weight > 1.0:
+            if has_hard_negs and hard_neg_weight > 0.0:
                 negs_text = []
                 for t in batch:
                     negs = t.get("negatives", [])
@@ -430,6 +434,31 @@ def run_training_stage(
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids, n_mask)
             else:
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
+
+            # Gradient accumulation
+            if grad_accum_steps > 1:
+                if accum_grads is None:
+                    accum_grads = grads
+                else:
+                    accum_grads = tree_map(lambda a, g: a + g, accum_grads, grads)
+                accum_count += 1
+
+                if accum_count < grad_accum_steps:
+                    # Eval grads to free the computation graph, but don't eval loss separately
+                    mx.eval(accum_grads)
+                    step += 1
+                    loss_val = float(loss.item())
+                    total_loss += loss_val
+                    if step % 50 == 0:
+                        elapsed = time.time() - stage_start
+                        avg_loss = total_loss / step
+                        print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
+                    continue
+
+                # Average accumulated gradients and apply
+                grads = tree_map(lambda g: g / grad_accum_steps, accum_grads)
+                accum_grads = None
+                accum_count = 0
 
             # Grad clipping
             grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
@@ -657,6 +686,7 @@ def main():
         bert_config,
         projection_dim=config.get("projection_dim"),
         pooling=config.get("pooling", "mean"),
+        normalize=config.get("normalize_embeddings", True),
     )
     model = load_from_safetensors(model, model_name)
     mx.eval(model.parameters())
@@ -666,6 +696,10 @@ def main():
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    max_seq_length = int(config.get("max_seq_length", 256))
+    grad_accum_steps = int(config.get("memory", {}).get("gradient_accumulation_steps", 1))
+    print(f"[config] max_seq_length={max_seq_length}, grad_accum_steps={grad_accum_steps}")
 
     ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
@@ -678,7 +712,8 @@ def main():
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
-        triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
+        max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
+        triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
 
         print("Building MTEB test LSH for decontamination...")
@@ -725,35 +760,69 @@ def main():
             return False
         return STAGE_ORDER.index(stage_name) < STAGE_ORDER.index(resume_stage)
 
+    # ---- Helper: filter data by stage config ----
+    def select_stage_data(stage_cfg: dict, all_triplets: list) -> list:
+        """Select training data based on stage config 'data' field."""
+        data_spec = stage_cfg.get("data", "all_curated")
+        if data_spec == "all_curated" or data_spec == "all_curated_with_hard_negs":
+            return all_triplets
+        elif data_spec == "qqp_se_paraphrase":
+            filtered = [t for t in all_triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
+            return filtered if filtered else all_triplets
+        else:
+            # Try matching source name directly
+            filtered = [t for t in all_triplets if data_spec in t.get("source", "")]
+            return filtered if filtered else all_triplets
+
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
-    if not warmup_data:
-        warmup_data = triplets
+    warmup_data = select_stage_data(warmup_cfg, triplets)
 
     warmup_lr = float(warmup_cfg.get("learning_rate", 1e-4))
-    weight_decay = float(config.get("optimizer", {}).get("weight_decay", 0.01))
-    optimizer = optim.AdamW(learning_rate=warmup_lr, weight_decay=weight_decay)
+    opt_cfg = config.get("optimizer", {})
+    weight_decay = float(opt_cfg.get("weight_decay", 0.01))
+    opt_betas = opt_cfg.get("betas", [0.9, 0.999])
+    opt_eps = float(opt_cfg.get("eps", 1e-8))
+    print(f"[config] optimizer: weight_decay={weight_decay}, betas={opt_betas}, eps={opt_eps}")
+
+    def make_optimizer(lr):
+        return optim.AdamW(learning_rate=lr, weight_decay=weight_decay,
+                           betas=opt_betas, eps=opt_eps)
+
+    optimizer = make_optimizer(warmup_lr)
+
+    # ---- Freeze encoder layers if configured ----
+    freeze_n = int(warmup_cfg.get("freeze_encoder_layers", 0))
+    if freeze_n > 0:
+        for i in range(min(freeze_n, len(model.encoder.layers))):
+            model.encoder.layers[i].freeze()
+        print(f"[config] Froze first {freeze_n} encoder layers")
 
     train_start = time.time()
 
     if should_skip("warmup"):
         print("=== Stage: warmup — SKIPPED (--resume-stage) ===", flush=True)
     elif warmup_data:
-        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup")
+        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup", max_seq_length, grad_accum_steps)
         save_stage_checkpoint("warmup")
+
+    # Unfreeze all layers for subsequent stages
+    if freeze_n > 0:
+        for i in range(min(freeze_n, len(model.encoder.layers))):
+            model.encoder.layers[i].unfreeze()
+        print(f"[config] Unfroze encoder layers for contrastive stage")
 
     # ---- Stage 2: Full contrastive ----
     contrastive_cfg = stages.get("contrastive", {})
     contrastive_lr = float(contrastive_cfg.get("learning_rate", 5e-5))
-    optimizer = optim.AdamW(learning_rate=contrastive_lr, weight_decay=weight_decay)
+    optimizer = make_optimizer(contrastive_lr)
 
     if should_skip("contrastive"):
         print("=== Stage: contrastive — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets:
         if resume_stage == "contrastive":
             load_stage_checkpoint("warmup")
-        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
+        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive", max_seq_length, grad_accum_steps)
         save_stage_checkpoint("contrastive")
 
     # Free MLX memory before hard negative mining (inference mode)
@@ -771,7 +840,8 @@ def main():
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
-        mining_triplets = triplets[:8000]
+        mining_max = int(mining_cfg.get("max_samples", 8000))
+        mining_triplets = triplets[:mining_max]
         mining_bs = int(mining_cfg.get("batch_size", 32))
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
@@ -785,14 +855,14 @@ def main():
     # ---- Stage 4: Hard negative fine-tuning ----
     finetuning_cfg = stages.get("fine_tuning", {})
     finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
-    optimizer = optim.AdamW(learning_rate=finetuning_lr, weight_decay=weight_decay)
+    optimizer = make_optimizer(finetuning_lr)
 
     if should_skip("finetune"):
         print("=== Stage: fine_tuning — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets_with_negs:
         if resume_stage == "finetune":
             load_stage_checkpoint("mining")
-        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning")
+        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning", max_seq_length, grad_accum_steps)
         save_stage_checkpoint("finetune")
 
     # Load latest checkpoint if resuming directly to eval
