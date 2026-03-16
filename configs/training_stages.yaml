@@ -4,8 +4,8 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "cls"  # mean, cls, cls_mean, latent_attn, layer_weighted
-max_seq_length: 512  # NaN fix: -inf → -1e9 in attention masks (padding+sliding window created all-inf rows)
+pooling: "mean"  # exp-75: test mean pooling (captures all-token info vs CLS-only); better for retrieval
+max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 
 stages:
