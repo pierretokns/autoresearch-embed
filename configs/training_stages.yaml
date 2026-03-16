@@ -61,7 +61,10 @@ optimizer:
   llrd_decay: 0.95  # layer-wise LR decay: layer_lr = lr * decay^(num_layers - layer_idx)
   ema_decay: 0.999  # exponential moving average of weights for eval (0.0 = disabled)
 
+data:
+  max_rows_per_dataset: 50000  # up from 30K default — more data, more diverse negatives
+
 memory:
   max_peak_gb: 55
   gradient_accumulation_steps: 4
-  gradient_checkpointing: true  # uses mlx.nn.utils.checkpoint (NOT mx.checkpoint which breaks nn.Module)
+  gradient_checkpointing: false  # DISABLED: nn_checkpoint causes NaN loss (exp-72). Needs investigation.
