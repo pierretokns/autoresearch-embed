@@ -20,6 +20,7 @@ stages:
     batch_size: 16  # small batch + grad_accum=4 → effective batch 64, fits seq_len=512
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
+    false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
     duration_minutes: 60
@@ -32,6 +33,7 @@ stages:
     batch_size: 16  # small batch + grad_accum=4 → effective batch 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
+    false_neg_threshold: 0.7  # mask in-batch negatives with cosine sim > 0.7
 
   hard_neg_mining:
     duration_minutes: 5
@@ -49,12 +51,15 @@ stages:
     warmup_ratio: 0.0
     batch_size: 16  # small batch + grad_accum=4 → effective batch 64
     hard_neg_weight: 2.0  # weight hard negs vs in-batch negs (>0.0 enables explicit hard neg loss)
+    false_neg_threshold: 0.0  # disabled for FT (hard negs are intentionally hard)
 
 optimizer:
   type: "adamw"
   betas: [0.9, 0.999]
   eps: 1.0e-8
   weight_decay: 0.01
+  llrd_decay: 0.95  # layer-wise LR decay: layer_lr = lr * decay^(num_layers - layer_idx)
+  ema_decay: 0.999  # exponential moving average of weights for eval (0.0 = disabled)
 
 memory:
   max_peak_gb: 55
