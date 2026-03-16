@@ -101,27 +101,48 @@ def evaluate(model, tokenizer, tasks: list[str] | None = None, output_dir: str =
 
     wrapper = MTEBModelWrapper(model, tokenizer)
 
-    # Run official MTEB evaluation
-    evaluation = mteb.MTEB(tasks=tasks)
-    results = evaluation.run(wrapper, output_folder=str(output_dir))
+    # Run each task individually with a timeout to prevent hangs
+    import signal
 
-    # Parse results from output files
+    TASK_TIMEOUT = 300  # 5 minutes per task
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError("MTEB task timed out")
+
     scores = {}
     for task_name in tasks:
+        print(f"  Evaluating: {task_name}...", flush=True)
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(TASK_TIMEOUT)
+
+            evaluation = mteb.MTEB(tasks=[task_name])
+            evaluation.run(wrapper, output_folder=str(output_dir))
+
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        except TimeoutError:
+            print(f"  WARNING: {task_name} timed out after {TASK_TIMEOUT}s, skipping", flush=True)
+            signal.alarm(0)
+            continue
+        except Exception as e:
+            print(f"  WARNING: {task_name} failed: {e}", flush=True)
+            continue
+
+        # Parse result for this task
         result_files = list(output_dir.glob(f"**/{task_name}*.json"))
         if result_files:
             with open(result_files[0]) as f:
                 task_result = json.load(f)
-            # Extract main score (MTEB stores it in the test split)
             for split_name in ["test", "validation", "dev"]:
                 if split_name in task_result:
                     split_data = task_result[split_name]
                     if isinstance(split_data, dict):
-                        # Get the primary metric for this task type
                         score = split_data.get("main_score", split_data.get("cos_sim", {}).get("spearman", 0))
                         if isinstance(score, dict):
                             score = score.get("spearman", score.get("main_score", 0))
-                        scores[task_name] = float(score) * 100  # Convert to percentage
+                        scores[task_name] = float(score) * 100
+                        print(f"  {task_name}: {scores[task_name]:.2f}", flush=True)
                     break
 
     # Compute category averages and primary score
