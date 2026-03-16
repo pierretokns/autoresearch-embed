@@ -58,8 +58,8 @@ optimizer:
   betas: [0.9, 0.999]
   eps: 1.0e-8
   weight_decay: 0.01
-  llrd_decay: 0.95  # layer-wise LR decay: layer_lr = lr * decay^(num_layers - layer_idx)
-  ema_decay: 0.999  # exponential moving average of weights for eval (0.0 = disabled)
+  llrd_decay: 1.0  # DISABLED — causes NaN (tested 3x). DO NOT re-enable until implementation is verified.
+  ema_decay: 0.0  # DISABLED — causes NaN (tested 3x). DO NOT re-enable until implementation is verified.
 
 data:
   max_rows_per_dataset: 50000  # up from 30K default — more data, more diverse negatives
