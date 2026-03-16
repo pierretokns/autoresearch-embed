@@ -771,7 +771,7 @@ def main():
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
         # Use subset for mining to avoid OOM on 64GB system
-        mining_triplets = triplets[:8000]
+        mining_triplets = triplets[:16000]
         mining_bs = int(mining_cfg.get("batch_size", 32))
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
