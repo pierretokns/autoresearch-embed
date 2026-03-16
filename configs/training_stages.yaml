@@ -7,6 +7,7 @@ projection_dim: 768
 pooling: "cls"  # CLS pooling (exp-67 baseline)
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
+simclr_head: true  # 2-layer MLP projection head: train on projected space, eval on raw encoder output
 
 stages:
   warmup:
@@ -23,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 65  # slightly extended (was 60 in exp-67)
+    duration_minutes: 60  # match exp-67 baseline
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -42,7 +43,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 0  # DISABLED — with hard_neg_weight=0, FT is just contrastive on 8K samples; may cause overfitting/forgetting
+    duration_minutes: 5  # match exp-67 baseline
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05

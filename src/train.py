@@ -759,6 +759,7 @@ def main():
         projection_dim=config.get("projection_dim"),
         pooling=config.get("pooling", "mean"),
         normalize=config.get("normalize_embeddings", True),
+        simclr_head=config.get("simclr_head", False),
     )
     model = load_from_safetensors(model, model_name)
     mx.eval(model.parameters())
@@ -920,6 +921,11 @@ def main():
 
     train_start = time.time()
 
+    # Enable SimCLR projection head during training (skipped at eval)
+    model.training_mode = True
+    if config.get("simclr_head", False):
+        print(f"[config] SimCLR projection head enabled (train-only)")
+
     if should_skip("warmup"):
         print("=== Stage: warmup — SKIPPED (--resume-stage) ===", flush=True)
     elif warmup_data:
@@ -952,6 +958,8 @@ def main():
         pass
 
     # ---- Stage 3: Hard negative mining ----
+    # Mining is inference — disable SimCLR head to use raw encoder embeddings
+    model.training_mode = False
     mining_cfg = stages.get("hard_neg_mining", {})
     if should_skip("mining"):
         print("=== Stage: hard_neg_mining — SKIPPED (--resume-stage) ===", flush=True)
@@ -975,6 +983,7 @@ def main():
         triplets_with_negs = triplets
 
     # ---- Stage 4: Hard negative fine-tuning ----
+    model.training_mode = True  # re-enable SimCLR head for fine-tuning
     finetuning_cfg = stages.get("fine_tuning", {})
     finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
     optimizer = make_optimizer(finetuning_lr)
@@ -1025,7 +1034,8 @@ def main():
         mx.eval(model.parameters())
         print("[EMA] Loaded EMA weights for evaluation")
 
-    # Disable gradient checkpointing for eval (no backward pass needed)
+    # Disable SimCLR head and gradient checkpointing for eval
+    model.training_mode = False
     model.encoder.gradient_checkpointing = False
     # Free training memory before eval
     try:

@@ -260,16 +260,36 @@ class LatentAttentionPooling(nn.Module):
         return mx.mean(out, axis=1)
 
 
+class SimCLRProjectionHead(nn.Module):
+    """2-layer MLP projection head (SimCLR pattern).
+    During training, loss operates on projected space.
+    During eval, this head is skipped — encoder output is used directly.
+    This absorbs task-specific noise into the head, keeping encoder representations general."""
+
+    def __init__(self, hidden_size: int, proj_size: int = 768):
+        super().__init__()
+        self.linear1 = nn.Linear(hidden_size, hidden_size, bias=True)
+        self.linear2 = nn.Linear(hidden_size, proj_size, bias=True)
+
+    def __call__(self, x: mx.array) -> mx.array:
+        x = self.linear1(x)
+        x = nn.gelu_approx(x)
+        x = self.linear2(x)
+        return x
+
+
 class EmbeddingModel(nn.Module):
     """Wraps ModernBERT encoder with pooling, optional projection, and L2 normalization."""
 
     def __init__(self, config: ModernBERTConfig, projection_dim: int | None = None,
-                 pooling: str = "mean", normalize: bool = True):
+                 pooling: str = "mean", normalize: bool = True,
+                 simclr_head: bool = False):
         super().__init__()
         self.encoder = ModernBERTEncoder(config)
         self.pooling = pooling
         self.hidden_size = config.hidden_size
         self.normalize = normalize
+        self.training_mode = False  # toggled by train.py
 
         # Pooling modules (initialized if needed)
         if pooling == "latent_attn":
@@ -281,10 +301,17 @@ class EmbeddingModel(nn.Module):
         else:
             self.layer_pool = None
 
+        # SimCLR projection head: train-only, skipped at eval
+        if simclr_head:
+            proj_dim = projection_dim if projection_dim else config.hidden_size
+            self.simclr_proj = SimCLRProjectionHead(config.hidden_size, proj_dim)
+        else:
+            self.simclr_proj = None
+
         # cls_mean: concatenate CLS + mean → project to output_dim
         input_dim = config.hidden_size * 2 if pooling == "cls_mean" else config.hidden_size
         out_dim = projection_dim if projection_dim else config.hidden_size
-        if projection_dim and (projection_dim != config.hidden_size or pooling == "cls_mean"):
+        if not simclr_head and projection_dim and (projection_dim != config.hidden_size or pooling == "cls_mean"):
             self.projection = nn.Linear(input_dim, out_dim, bias=False)
             self.output_dim = out_dim
         else:
@@ -318,6 +345,10 @@ class EmbeddingModel(nn.Module):
 
         if self.projection is not None:
             pooled = self.projection(pooled)
+
+        # SimCLR: project during training only (loss on projected space, eval on raw encoder)
+        if self.simclr_proj is not None and self.training_mode:
+            pooled = self.simclr_proj(pooled)
 
         # L2 normalize
         if self.normalize:
