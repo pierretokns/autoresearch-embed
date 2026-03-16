@@ -147,12 +147,14 @@ class ModernBERTEncoder(nn.Module):
 
     def _build_sliding_window_mask(self, T: int) -> mx.array:
         """Build banded attention mask for local/sliding window layers.
-        Returns additive mask of shape (1, 1, T, T): 0.0 where allowed, -inf where blocked."""
+        Returns additive mask of shape (1, 1, T, T): 0.0 where allowed, -1e9 where blocked.
+        Uses -1e9 instead of -inf to avoid NaN gradients when padding + window mask
+        combine to create all-masked rows (softmax(-inf,...,-inf) = NaN)."""
         half_window = self.config.local_attention // 2  # 64 for ModernBERT-base
         q_idx = mx.arange(T)[:, None]   # (T, 1)
         kv_idx = mx.arange(T)[None, :]  # (1, T)
         within_window = mx.abs(q_idx - kv_idx) <= half_window  # (T, T)
-        mask = mx.where(within_window, mx.array(0.0), mx.array(float("-inf")))
+        mask = mx.where(within_window, mx.array(0.0), mx.array(-1e9))
         return mask[None, None, :, :]    # (1, 1, T, T)
 
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None,
@@ -161,10 +163,11 @@ class ModernBERTEncoder(nn.Module):
         x = self.embedding_norm(x)
         T = input_ids.shape[1]
 
-        # Build padding mask: (B, 1, 1, T)
+        # Build padding mask: (B, 1, 1, T) — use -1e9 instead of -inf to avoid
+        # NaN when combined with sliding window mask on heavily-padded sequences
         if attention_mask is not None:
             padding_mask = mx.where(attention_mask[:, None, None, :] == 0,
-                                    mx.array(float("-inf")), mx.array(0.0))
+                                    mx.array(-1e9), mx.array(0.0))
         else:
             padding_mask = None
 

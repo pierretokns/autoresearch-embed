@@ -5,7 +5,7 @@ base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
 pooling: "cls"  # mean, cls, cls_mean, latent_attn, layer_weighted
-max_seq_length: 512  # exp-73: finally test 512 (NaN was from grad_ckpt, not seq_len)
+max_seq_length: 512  # NaN fix: -inf → -1e9 in attention masks (padding+sliding window created all-inf rows)
 normalize_embeddings: true
 
 stages:
@@ -17,7 +17,7 @@ stages:
     learning_rate: 1.0e-4
     lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
-    batch_size: 32  # halved for seq_len=512; grad_accum=2 keeps effective=64
+    batch_size: 64  # try B=64 at seq_len=512; if OOM, fall back to 32+grad_accum
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
@@ -30,7 +30,7 @@ stages:
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 32  # batch=32 * grad_accum=2 = effective 64 (seq_len=512)
+    batch_size: 64  # try B=64 at seq_len=512 (in-batch negatives matter)
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
     false_neg_threshold: 0.7  # mask in-batch negatives with cosine sim > 0.7
@@ -49,7 +49,7 @@ stages:
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 32  # batch=32 * grad_accum=2 = effective 64 (seq_len=512)
+    batch_size: 64  # try B=64 at seq_len=512
     hard_neg_weight: 0.0  # DISABLED — hard neg loss needs investigation (exp-70: weight=2.0 scored 37.77)
     false_neg_threshold: 0.0  # disabled for FT (hard negs are intentionally hard)
 
@@ -66,5 +66,5 @@ data:
 
 memory:
   max_peak_gb: 55
-  gradient_accumulation_steps: 2  # batch=32 * grad_accum=2 = effective 64 (needed for seq_len=512 memory)
+  gradient_accumulation_steps: 1  # no grad_accum — trying B=64 at seq_len=512 directly
   gradient_checkpointing: false  # DISABLED: nn_checkpoint causes NaN loss (exp-72). Needs investigation.
