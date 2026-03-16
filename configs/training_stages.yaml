@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "mean"  # exp-75: test mean pooling (captures all-token info vs CLS-only); better for retrieval
+pooling: "cls"  # CLS pooling (exp-67 baseline)
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 
@@ -23,35 +23,35 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 60
+    duration_minutes: 65  # slightly extended (was 60 in exp-67)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 64  # try B=64 at seq_len=512 (in-batch negatives matter)
+    batch_size: 64
     negatives: "in_batch_plus_explicit"
-    source_stratification: true  # fill batches from single source
-    false_neg_threshold: 0.0  # disabled to match exp-67 baseline (isolate seq_len effect)
+    source_stratification: true
+    false_neg_threshold: 0.0
 
   hard_neg_mining:
     duration_minutes: 5
     top_k: 7
-    batch_size: 128  # inference only, can be larger
-    min_similarity: 0.3  # ignore very dissimilar passages
+    batch_size: 128
+    min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 5
+    duration_minutes: 0  # DISABLED — with hard_neg_weight=0, FT is just contrastive on 8K samples; may cause overfitting/forgetting
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 64  # try B=64 at seq_len=512
-    hard_neg_weight: 0.0  # DISABLED — hard neg loss needs investigation (exp-70: weight=2.0 scored 37.77)
-    false_neg_threshold: 0.0  # disabled for FT (hard negs are intentionally hard)
+    batch_size: 64
+    hard_neg_weight: 0.0
+    false_neg_threshold: 0.0
 
 optimizer:
   type: "adamw"
@@ -67,4 +67,4 @@ data:
 memory:
   max_peak_gb: 55
   gradient_accumulation_steps: 1  # no grad_accum — trying B=64 at seq_len=512 directly
-  gradient_checkpointing: true  # RE-ENABLED: NaN was from -inf attention masks, not grad_ckpt. Saves ~80% activation memory.
+  gradient_checkpointing: false  # disabled to match exp-67 baseline exactly
