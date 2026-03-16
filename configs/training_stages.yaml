@@ -5,7 +5,7 @@ base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
 pooling: "cls"  # mean, cls, cls_mean, latent_attn, layer_weighted
-max_seq_length: 512
+max_seq_length: 256  # 512 causes NaN — revert to exp-67 working value until debugged
 normalize_embeddings: true
 
 stages:
@@ -17,7 +17,7 @@ stages:
     learning_rate: 1.0e-4
     lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
-    batch_size: 16  # small batch + grad_accum=4 → effective batch 64, fits seq_len=512
+    batch_size: 64  # match exp-67 working config
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
@@ -66,5 +66,5 @@ data:
 
 memory:
   max_peak_gb: 55
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 1  # disable grad_accum — batch_size=64 with seq_len=256 fits in memory
   gradient_checkpointing: false  # DISABLED: nn_checkpoint causes NaN loss (exp-72). Needs investigation.
