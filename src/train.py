@@ -467,6 +467,10 @@ def run_training_stage(
             else:
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
 
+            # Track loss for all micro-batches
+            micro_loss = float(loss.item())
+            total_loss += micro_loss
+
             # Gradient accumulation
             if grad_accum_steps > 1:
                 if accum_grads is None:
@@ -476,15 +480,7 @@ def run_training_stage(
                 accum_count += 1
 
                 if accum_count < grad_accum_steps:
-                    # Eval grads to free the computation graph, but don't eval loss separately
                     mx.eval(accum_grads)
-                    step += 1
-                    loss_val = float(loss.item())
-                    total_loss += loss_val
-                    if step % 50 == 0:
-                        elapsed = time.time() - stage_start
-                        avg_loss = total_loss / step
-                        print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                     continue
 
                 # Average accumulated gradients and apply
@@ -498,7 +494,7 @@ def run_training_stage(
             # Update LR according to schedule (time-based for accuracy)
             if lr_schedule != "constant":
                 current_lr = get_lr_by_time(time.time() - stage_start)
-                if not hasattr(optimizer, '_llrd_schedule'):
+                if not hasattr(optimizer, '_llrd_ratios'):
                     optimizer.learning_rate = current_lr
 
             # Apply LLRD: scale gradients by per-param ratio (optimizer keeps correct base LR)
@@ -512,7 +508,7 @@ def run_training_stage(
             optimizer.update(model, grads)
             mx.eval(model.parameters(), optimizer.state, loss)
 
-            # EMA update
+            # EMA update (per optimizer step, not per micro-batch)
             if ema_state is not None:
                 decay = ema_state["decay"]
                 ema_w = ema_state["weights"]
@@ -523,12 +519,11 @@ def run_training_stage(
                     mx.eval(list(ema_w.values()))
 
             step += 1
-            loss_val = float(loss.item())
-            total_loss += loss_val
+            micro_steps = step * max(grad_accum_steps, 1)  # total micro-batches processed
 
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
-                avg_loss = total_loss / step
+                avg_loss = total_loss / micro_steps
                 print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                 try:
                     import wandb
@@ -540,7 +535,8 @@ def run_training_stage(
         random.shuffle(data)
 
     stage_time = time.time() - stage_start
-    avg_loss = total_loss / max(step, 1)
+    total_micro = step * max(grad_accum_steps, 1)
+    avg_loss = total_loss / max(total_micro, 1)
     print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s", flush=True)
     return step
 

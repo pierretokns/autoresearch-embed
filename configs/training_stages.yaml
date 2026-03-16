@@ -50,7 +50,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 16  # small batch + grad_accum=4 → effective batch 64
-    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs (>0.0 enables explicit hard neg loss)
+    hard_neg_weight: 0.0  # DISABLED — hard neg loss needs investigation (exp-70: weight=2.0 scored 37.77)
     false_neg_threshold: 0.0  # disabled for FT (hard negs are intentionally hard)
 
 optimizer:
@@ -64,4 +64,4 @@ optimizer:
 memory:
   max_peak_gb: 55
   gradient_accumulation_steps: 4
-  gradient_checkpointing: false  # DISABLED: mx.checkpoint breaks nn.Module gradients in MLX
+  gradient_checkpointing: true  # uses mlx.nn.utils.checkpoint (NOT mx.checkpoint which breaks nn.Module)

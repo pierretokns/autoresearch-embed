@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx.nn.utils import checkpoint as nn_checkpoint
 
 
 @dataclass
@@ -182,7 +183,7 @@ class ModernBERTEncoder(nn.Module):
                 # Note: gradient checkpointing with closure-captured mask works when
                 # the mask is not a function of model parameters (it's derived from input only)
                 if self.gradient_checkpointing:
-                    x = mx.checkpoint(layer)(x, mask=mask)
+                    x = nn_checkpoint(layer)(x, mask=mask)
                 else:
                     x = layer(x, mask=mask)
                 all_hidden.append(x)
@@ -192,7 +193,7 @@ class ModernBERTEncoder(nn.Module):
             for layer in self.layers:
                 mask = global_mask if layer.attn.is_global else local_mask
                 if self.gradient_checkpointing:
-                    x = mx.checkpoint(layer)(x, mask=mask)
+                    x = nn_checkpoint(layer)(x, mask=mask)
                 else:
                     x = layer(x, mask=mask)
             x = self.final_norm(x)
