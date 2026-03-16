@@ -332,6 +332,21 @@ def run_training_stage(
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
+    use_instructions = bool(stage_cfg.get("instruction_prefix", False))
+
+    # Task-specific instruction prefixes mapped by data source
+    QUERY_PREFIXES = {
+        "glue": "Find semantically equivalent questions: ",
+        "sentence-transformers/stackexchange-duplicates": "Find duplicate technical questions: ",
+        "ms_marco": "Retrieve a passage that answers this question: ",
+        "sentence-transformers/natural-questions": "Retrieve a Wikipedia passage answering: ",
+        "sentence-transformers/reddit-title-body": "Find the body text for this Reddit title: ",
+        "ag_news": "Find news articles on the same topic: ",
+        "fancyzhx/dbpedia_14": "Find documents about the same entity: ",
+        "yahoo_answers_topics": "Find questions on the same topic: ",
+        "stanfordnlp/snli": "Find an entailing or paraphrasing sentence: ",
+        "hotpot_qa": "Retrieve a supporting passage for this question: ",
+    }
     lr_schedule = stage_cfg.get("lr_schedule", "constant")
     base_lr = float(stage_cfg.get("learning_rate", 5e-5))
     warmup_ratio = float(stage_cfg.get("warmup_ratio", 0.0))
@@ -386,7 +401,13 @@ def run_training_stage(
             if len(batch) < 2:
                 continue
 
-            queries = [t["query"][:500] for t in batch]
+            if use_instructions:
+                queries = [
+                    QUERY_PREFIXES.get(t.get("source", ""), "") + t["query"][:480]
+                    for t in batch
+                ]
+            else:
+                queries = [t["query"][:500] for t in batch]
             positives = [t["positive"][:500] for t in batch]
 
             q_enc = tokenizer(queries, padding=True, truncation=True,

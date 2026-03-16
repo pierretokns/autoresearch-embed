@@ -14,8 +14,8 @@ stages:
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
-    learning_rate: 1.5e-4
-    lr_schedule: "cosine_decay"
+    learning_rate: 1.0e-4
+    lr_schedule: "linear_warmup_constant"
     warmup_ratio: 0.1
     batch_size: 64
     negatives: "in_batch_only"
@@ -32,6 +32,7 @@ stages:
     batch_size: 64
     negatives: "in_batch_plus_explicit"
     source_stratification: true  # fill batches from single source
+    instruction_prefix: true  # prepend task-specific instruction to queries
 
   hard_neg_mining:
     duration_minutes: 5
