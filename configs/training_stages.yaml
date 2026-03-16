@@ -14,8 +14,8 @@ stages:
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
-    learning_rate: 1.0e-4
-    lr_schedule: "linear_warmup_constant"
+    learning_rate: 1.5e-4
+    lr_schedule: "cosine_decay"
     warmup_ratio: 0.1
     batch_size: 64
     negatives: "in_batch_only"
@@ -26,7 +26,7 @@ stages:
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
-    learning_rate: 3.0e-5
+    learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64
