@@ -40,7 +40,7 @@ stages:
     min_similarity: 0.3  # ignore very dissimilar passages
 
   fine_tuning:
-    duration_minutes: 10
+    duration_minutes: 5
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
@@ -48,7 +48,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 32
-    hard_neg_weight: 1.0  # weight hard negs vs in-batch negs
+    hard_neg_weight: 2.0  # weight hard negs vs in-batch negs (>1.0 enables explicit hard neg loss)
 
 optimizer:
   type: "adamw"
