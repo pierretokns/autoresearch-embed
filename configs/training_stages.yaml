@@ -64,4 +64,4 @@ optimizer:
 memory:
   max_peak_gb: 55
   gradient_accumulation_steps: 4
-  gradient_checkpointing: true
+  gradient_checkpointing: false  # DISABLED: mx.checkpoint breaks nn.Module gradients in MLX

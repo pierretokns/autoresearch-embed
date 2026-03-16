@@ -144,22 +144,43 @@ class ModernBERTEncoder(nn.Module):
         self.final_norm = nn.RMSNorm(config.hidden_size)
         self.gradient_checkpointing = False
 
+    def _build_sliding_window_mask(self, T: int) -> mx.array:
+        """Build banded attention mask for local/sliding window layers.
+        Returns additive mask of shape (1, 1, T, T): 0.0 where allowed, -inf where blocked."""
+        half_window = self.config.local_attention // 2  # 64 for ModernBERT-base
+        q_idx = mx.arange(T)[:, None]   # (T, 1)
+        kv_idx = mx.arange(T)[None, :]  # (1, T)
+        within_window = mx.abs(q_idx - kv_idx) <= half_window  # (T, T)
+        mask = mx.where(within_window, mx.array(0.0), mx.array(float("-inf")))
+        return mask[None, None, :, :]    # (1, 1, T, T)
+
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None,
                  return_all_layers: bool = False):
         x = self.tok_embeddings(input_ids)
         x = self.embedding_norm(x)
+        T = input_ids.shape[1]
 
-        # Build attention mask for local attention layers
+        # Build padding mask: (B, 1, 1, T)
         if attention_mask is not None:
-            # Convert (B, T) binary mask to additive mask (B, 1, 1, T) for broadcasting
-            mask = mx.where(attention_mask[:, None, None, :] == 0,
-                            mx.array(float("-inf")), mx.array(0.0))
+            padding_mask = mx.where(attention_mask[:, None, None, :] == 0,
+                                    mx.array(float("-inf")), mx.array(0.0))
         else:
-            mask = None
+            padding_mask = None
+
+        # Build per-layer masks: global layers get padding-only, local layers get sliding window
+        global_mask = padding_mask
+        sliding_mask = self._build_sliding_window_mask(T)
+        if padding_mask is not None:
+            local_mask = sliding_mask + padding_mask  # broadcasts (1,1,T,T) + (B,1,1,T) → (B,1,T,T)
+        else:
+            local_mask = sliding_mask
 
         if return_all_layers:
             all_hidden = []
             for layer in self.layers:
+                mask = global_mask if layer.attn.is_global else local_mask
+                # Note: gradient checkpointing with closure-captured mask works when
+                # the mask is not a function of model parameters (it's derived from input only)
                 if self.gradient_checkpointing:
                     x = mx.checkpoint(layer)(x, mask=mask)
                 else:
@@ -169,6 +190,7 @@ class ModernBERTEncoder(nn.Module):
             return all_hidden
         else:
             for layer in self.layers:
+                mask = global_mask if layer.attn.is_global else local_mask
                 if self.gradient_checkpointing:
                     x = mx.checkpoint(layer)(x, mask=mask)
                 else:
