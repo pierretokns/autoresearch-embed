@@ -47,10 +47,10 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
     # Run Claude Code in non-interactive mode
     # --print: output only (no TUI)
     # --max-turns: prevent context exhaustion crash (clean exit instead)
-    # --model: use sonnet for experiment planning (cheaper, fast)
+    # --model: use opus for better research judgment and bug detection
     cd "$PROJECT_DIR" && claude \
         --print \
-        --model claude-sonnet-4-6 \
+        --model claude-opus-4-6 \
         --dangerously-skip-permissions \
         --max-turns 200 \
         "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. CRITICAL: experiment.py is synchronous — just call it and wait for it to return. NEVER create while/sleep/pgrep polling loops or background monitoring scripts. They deadlock. Never stop." \

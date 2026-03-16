@@ -10,11 +10,35 @@ Autonomous embedding model research on Apple Silicon. Train, evaluate, and itera
    Or: `git log --oneline -20`
 2. **Decide what to try** (see Research Directions below)
 3. **Edit code** in `src/` or `configs/`
-4. **Run**: `uv run scripts/experiment.py "description of what you changed"`
-5. **Read the output summary**. Think about what worked and what to try next.
-6. GOTO 1
+4. **Pre-flight check** (MANDATORY before every experiment — see Pre-Flight Checklist below)
+5. **Run**: `uv run scripts/experiment.py "description of what you changed"`
+6. **Read the output summary**. Think about what worked and what to try next.
+7. GOTO 1
 
 The script handles git, training, eval, contamination checks, results logging, wandb, agenthub posting, and git push. You just research.
+
+## Pre-Flight Checklist
+
+**Run these checks after editing code and BEFORE running experiment.py.** Skipping this wastes 30-90 minutes on broken experiments. Past bugs found: frozen pooling params, ignored config fields, hardcoded values shadowing config.
+
+**If you added or changed a config field:**
+- Grep for the field name in `src/`. Is it actually read? If `grep -r "field_name" src/` returns nothing, your config change will be silently ignored.
+- Print the actual value at the start of the stage: `print(f"[config] field_name={value}")`. Confirm it matches what you set.
+
+**If you added a new module or layer (pooling, projection, etc.):**
+- After model init, verify it appears in trainable parameters: `print([(k, v.shape) for k, v in model.trainable_parameters()])`. If your new module's params aren't listed, they won't receive gradients — the module is frozen.
+- In MLX, `mx.zeros(...)` creates a constant, NOT a learnable parameter. Use proper parameter registration.
+
+**If you changed a loss function or added a loss term:**
+- Print the loss value for the first 2-3 steps. Confirm it's non-zero and changing. A loss stuck at 0.0 means the term isn't contributing gradients.
+- If you added a new loss term, confirm it's actually added to the total loss (not just computed and discarded).
+
+**If you changed data loading or dataset selection:**
+- Print the number of loaded samples and their source distribution at the start of training. Confirm the new data is actually present.
+
+**After 5+ consecutive failures to beat the champion:**
+- Before trying another single-variable ablation, combine the top 2-3 near-winners.
+- Re-read this checklist and verify no silent bugs are masking your changes.
 
 ## Experiment Time Budget
 
@@ -186,9 +210,20 @@ uv run scripts/experiment.py "description" --resume-stage mining
 
 Valid stages: `contrastive`, `mining`, `finetune`, `eval`. This loads the checkpoint from the prior stage and continues.
 
+## Bug Fixes Applied (issue #2) — experiments to re-run
+
+All config fields now work. All pooling modes have proper gradient flow. See issue #2 on GitHub for details.
+
+**Invalidated experiments — re-run these ideas with fixed code:**
+1. **Latent attention pooling** (exp-44/45/46 invalid — zero-init killed gradients). Use current best recipe.
+2. **max_seq_length=512** (was hardcoded 256 for all 70 experiments). Test retrieval impact.
+3. **Hard neg weight sweep** (exp-33→69 had hard negs silently disabled — `>1.0` condition fixed to `>0.0`). Try 0.5, 1.0, 2.0.
+4. **gradient_accumulation=4** (was ignored, now works). Effective batch 256.
+5. Combine winners from above.
+
 ## Resumption
 
-On new session: read `results.jsonl` and `git log --oneline -20`. If uncommitted changes exist, `git checkout .`. Jump into the loop. Do not re-read this file or re-run setup — go straight to research.
+On new session: read `results.jsonl` and `git log --oneline -20`. If uncommitted changes exist, `git checkout .`. Check the "Known Bug Corrections" section above for any pending fixes. Jump into the loop. Do not re-read this file or re-run setup — go straight to research.
 
 ## NEVER STOP
 

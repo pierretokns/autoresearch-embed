@@ -133,7 +133,7 @@ class ModernBERTLayer(nn.Module):
 
 
 class ModernBERTEncoder(nn.Module):
-    """Full ModernBERT encoder stack."""
+    """Full ModernBERT encoder stack with optional gradient checkpointing."""
 
     def __init__(self, config: ModernBERTConfig):
         super().__init__()
@@ -142,6 +142,7 @@ class ModernBERTEncoder(nn.Module):
         self.embedding_norm = nn.RMSNorm(config.hidden_size)
         self.layers = [ModernBERTLayer(config, i) for i in range(config.num_hidden_layers)]
         self.final_norm = nn.RMSNorm(config.hidden_size)
+        self.gradient_checkpointing = False
 
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None,
                  return_all_layers: bool = False):
@@ -159,14 +160,19 @@ class ModernBERTEncoder(nn.Module):
         if return_all_layers:
             all_hidden = []
             for layer in self.layers:
-                x = layer(x, mask=mask)
+                if self.gradient_checkpointing:
+                    x = mx.checkpoint(layer)(x, mask=mask)
+                else:
+                    x = layer(x, mask=mask)
                 all_hidden.append(x)
-            # Apply final norm only to last layer
             all_hidden[-1] = self.final_norm(all_hidden[-1])
-            return all_hidden  # list of (B, T, H), length = num_layers
+            return all_hidden
         else:
             for layer in self.layers:
-                x = layer(x, mask=mask)
+                if self.gradient_checkpointing:
+                    x = mx.checkpoint(layer)(x, mask=mask)
+                else:
+                    x = layer(x, mask=mask)
             x = self.final_norm(x)
             return x
 
@@ -293,23 +299,37 @@ class EmbeddingModel(nn.Module):
             pooled = pooled / norms
         return pooled
 
-    def encode_sentences(self, sentences: list[str], tokenizer, batch_size: int = 64,
+    def encode_sentences(self, sentences: list[str], tokenizer, batch_size: int = 128,
                          max_length: int = 512) -> "numpy.ndarray":
-        """MTEB-compatible encode method. Returns numpy array of L2-normalized embeddings."""
+        """MTEB-compatible encode method. Returns numpy array of L2-normalized embeddings.
+        Sorts by length to minimize padding waste, then restores original order."""
         import numpy as np
 
+        if not sentences:
+            return np.zeros((0, self.output_dim), dtype=np.float32)
+
+        # Sort by length to minimize padding within batches
+        indexed = sorted(enumerate(sentences), key=lambda x: len(x[1]))
+        sorted_indices = [i for i, _ in indexed]
+        sorted_sentences = [s for _, s in indexed]
+
         all_embs = []
-        for i in range(0, len(sentences), batch_size):
-            batch = sentences[i:i + batch_size]
+        for i in range(0, len(sorted_sentences), batch_size):
+            batch = sorted_sentences[i:i + batch_size]
             enc = tokenizer(batch, padding=True, truncation=True,
                             max_length=max_length, return_tensors="np")
             input_ids = mx.array(enc["input_ids"])
             attention_mask = mx.array(enc["attention_mask"])
             emb = self(input_ids, attention_mask)
             mx.eval(emb)
-            all_embs.append(np.array(emb, copy=False))
+            all_embs.append(np.array(emb, dtype=np.float32))
 
-        return np.concatenate(all_embs, axis=0).astype(np.float32)
+        # Restore original order
+        concatenated = np.concatenate(all_embs, axis=0)
+        restore = np.empty_like(sorted_indices)
+        for new_idx, orig_idx in enumerate(sorted_indices):
+            restore[orig_idx] = new_idx
+        return concatenated[restore]
 
 
 def load_from_safetensors(model: EmbeddingModel, model_id: str = "answerdotai/ModernBERT-base"):

@@ -699,7 +699,12 @@ def main():
 
     max_seq_length = int(config.get("max_seq_length", 256))
     grad_accum_steps = int(config.get("memory", {}).get("gradient_accumulation_steps", 1))
-    print(f"[config] max_seq_length={max_seq_length}, grad_accum_steps={grad_accum_steps}")
+    use_grad_ckpt = config.get("memory", {}).get("gradient_checkpointing", False)
+    print(f"[config] max_seq_length={max_seq_length}, grad_accum_steps={grad_accum_steps}, grad_ckpt={use_grad_ckpt}")
+
+    # Enable gradient checkpointing to reduce activation memory (~80% savings)
+    if use_grad_ckpt:
+        model.encoder.gradient_checkpointing = True
 
     ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
@@ -891,6 +896,14 @@ def main():
 
     # ---- Evaluation ----
     print("\nRunning MTEB evaluation...")
+
+    # Disable gradient checkpointing for eval (no backward pass needed)
+    model.encoder.gradient_checkpointing = False
+    # Free training memory before eval
+    try:
+        mx.metal.clear_cache()
+    except Exception:
+        pass
 
     eval_tasks = QUICK_TASKS if args.quick_eval_only else FULL_TASKS
     eval_outdir = "mteb_results_quick" if args.quick_eval_only else "mteb_results"
