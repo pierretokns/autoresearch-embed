@@ -782,7 +782,8 @@ def main():
     # EMA setup is deferred until after opt_cfg is defined (see below)
     ema_state = None
 
-    ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
+    max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
+    ds_key = hashlib.sha256(json.dumps({"datasets": DATASETS, "max_rows": max_rows}, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -793,7 +794,6 @@ def main():
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
-        max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
         triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
 
