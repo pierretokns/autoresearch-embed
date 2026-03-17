@@ -50,7 +50,7 @@ stages:
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 64
+    batch_size: 32  # exp-67 used batch=32 + grad_accum=4
     hard_neg_weight: 0.0
     false_neg_threshold: 0.0
 
@@ -67,5 +67,5 @@ data:
 
 memory:
   max_peak_gb: 55
-  gradient_accumulation_steps: 1  # no grad_accum — trying B=64 at seq_len=512 directly
+  gradient_accumulation_steps: 4  # exp-67 used batch=32 + grad_accum=4 = effective 128
   gradient_checkpointing: false  # disabled to match exp-67 baseline exactly

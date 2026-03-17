@@ -161,30 +161,19 @@ class ModernBERTEncoder(nn.Module):
                  return_all_layers: bool = False):
         x = self.tok_embeddings(input_ids)
         x = self.embedding_norm(x)
-        T = input_ids.shape[1]
 
-        # Build padding mask: (B, 1, 1, T) — use -1e9 instead of -inf to avoid
-        # NaN when combined with sliding window mask on heavily-padded sequences
+        # Build attention mask: padding-only for ALL layers (exp-67 style).
+        # Using -inf is correct here since with seq_len=256 and no sliding window,
+        # there are no all-masked rows (NaN issue was from sliding window + padding).
         if attention_mask is not None:
-            padding_mask = mx.where(attention_mask[:, None, None, :] == 0,
-                                    mx.array(-1e9), mx.array(0.0))
+            mask = mx.where(attention_mask[:, None, None, :] == 0,
+                            mx.array(float("-inf")), mx.array(0.0))
         else:
-            padding_mask = None
-
-        # Build per-layer masks: global layers get padding-only, local layers get sliding window
-        global_mask = padding_mask
-        sliding_mask = self._build_sliding_window_mask(T)
-        if padding_mask is not None:
-            local_mask = sliding_mask + padding_mask  # broadcasts (1,1,T,T) + (B,1,1,T) → (B,1,T,T)
-        else:
-            local_mask = sliding_mask
+            mask = None
 
         if return_all_layers:
             all_hidden = []
             for layer in self.layers:
-                mask = global_mask if layer.attn.is_global else local_mask
-                # Note: gradient checkpointing with closure-captured mask works when
-                # the mask is not a function of model parameters (it's derived from input only)
                 if self.gradient_checkpointing:
                     x = nn_checkpoint(layer)(x, mask=mask)
                 else:
@@ -194,7 +183,6 @@ class ModernBERTEncoder(nn.Module):
             return all_hidden
         else:
             for layer in self.layers:
-                mask = global_mask if layer.attn.is_global else local_mask
                 if self.gradient_checkpointing:
                     x = nn_checkpoint(layer)(x, mask=mask)
                 else:
