@@ -616,24 +616,25 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
             self.tokenizer = tok
 
         def encode(self, inputs, *, task_metadata=None, hf_split=None, hf_subset=None, prompt_type=None, **kwargs):
-            """inputs is a DataLoader yielding BatchedInput dicts with 'text' key."""
-            all_embs = []
+            """inputs is a DataLoader yielding BatchedInput dicts with 'text' key.
+            Accumulates all sentences first, then encodes in one call at our preferred
+            batch_size — avoids 8× overhead from MTEB's small DataLoader batches (32)."""
+            all_sentences = []
             for batch in inputs:
                 sentences = batch.get("text", batch.get("sentence", []))
                 if not sentences and batch:
                     sentences = list(batch.values())[0]
                 if sentences:
-                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=256)
-                    all_embs.append(emb)
-            if all_embs:
-                return np.concatenate(all_embs, axis=0)
+                    all_sentences.extend(sentences)
+            if all_sentences:
+                return self.model.encode_sentences(all_sentences, self.tokenizer, batch_size=512)
             return np.zeros((0, self.model.output_dim), dtype=np.float32)
 
     wrapper = ModelWrapper(model, tokenizer)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     import signal
-    TASK_TIMEOUT = 900  # 15 min per task (RedditClustering needs ~12 min with k-means)
+    TASK_TIMEOUT = 1200  # 20 min per task (RedditClustering: 25×7K sentences + k-means = ~18 min)
 
     def _timeout_handler(signum, frame):
         raise TimeoutError("MTEB task timed out")
