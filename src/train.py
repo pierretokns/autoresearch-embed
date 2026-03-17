@@ -619,7 +619,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     import signal
-    TASK_TIMEOUT = 300  # 5 minutes per task
+    TASK_TIMEOUT = 600  # 10 minutes per task (RedditClustering needs >5min)
 
     def _timeout_handler(signum, frame):
         raise TimeoutError("MTEB task timed out")
