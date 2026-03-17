@@ -24,10 +24,10 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 90  # extended training (exp-84: 57.89)
+    duration_minutes: 60  # match exp-82 baseline (best: 57.72)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.02  # lower temp = sharper distribution = harder contrastive learning (was 0.05)
+    temperature: 0.05  # match exp-82 baseline
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
