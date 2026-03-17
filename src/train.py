@@ -53,7 +53,10 @@ def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float
     """InfoNCE loss with in-batch negatives and optional false-negative masking.
 
     false_neg_threshold: if > 0, mask off-diagonal pairs with cosine sim above threshold
-    using -1e9 (NOT -inf, which causes NaN in logsumexp when all entries are masked)."""
+    using -1e9 (NOT -inf, which causes NaN in logsumexp when all entries are masked).
+
+    Memory-efficient: materializes the full B×B sim matrix. For B>256, consider
+    infonce_loss_tiled() which uses O(B) memory via chunked logsumexp."""
     sim = mx.matmul(query_emb, positive_emb.T) / temperature
     B = sim.shape[0]
     labels = mx.arange(B)
@@ -76,6 +79,47 @@ def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float
         loss_bwd = -mx.mean((sim_bwd - lse_bwd)[mx.arange(B), labels])
         return (loss_fwd + loss_bwd) * 0.5
     return loss_fwd
+
+
+def infonce_loss_tiled(query_emb: mx.array, positive_emb: mx.array,
+                       temperature: float = 0.05, tile_size: int = 64) -> mx.array:
+    """Memory-efficient InfoNCE using tiled similarity computation.
+
+    Instead of materializing the full B×B similarity matrix (O(B²) memory),
+    computes logsumexp in tiles of size tile_size (O(B×tile) memory).
+    Enables batch_size=256+ without OOM. Based on CVPR 2025:
+    "Breaking the Memory Barrier of Contrastive Loss via Tile-Based Strategy".
+
+    Uses online logsumexp: for each query, iterates over tiles of positives,
+    maintaining running max and sum for numerical stability."""
+    B = query_emb.shape[0]
+
+    # Positive pair scores (diagonal elements): sum(q_i * p_i) / tau
+    pos_scores = mx.sum(query_emb * positive_emb, axis=-1) / temperature  # (B,)
+
+    # Compute logsumexp over all negatives+positive in tiles
+    # Online logsumexp: track running_max and running_sum_exp
+    running_max = mx.full((B,), -1e9)
+    running_sum_exp = mx.zeros((B,))
+
+    for j in range(0, B, tile_size):
+        # Similarity of all queries against this tile of positives: (B, tile)
+        tile_pos = positive_emb[j:j + tile_size]
+        tile_sim = mx.matmul(query_emb, tile_pos.T) / temperature  # (B, tile)
+
+        # Online logsumexp update
+        tile_max = mx.max(tile_sim, axis=1)  # (B,)
+        new_max = mx.maximum(running_max, tile_max)
+        # Rescale previous sum and add new tile
+        running_sum_exp = running_sum_exp * mx.exp(running_max - new_max) + mx.sum(mx.exp(tile_sim - new_max[:, None]), axis=1)
+        running_max = new_max
+
+    # logsumexp = running_max + log(running_sum_exp)
+    lse = running_max + mx.log(running_sum_exp)
+
+    # Loss = -pos_score + logsumexp = -(pos_score - lse)
+    loss = -mx.mean(pos_scores - lse)
+    return loss
 
 
 def matryoshka_infonce_loss(
@@ -406,6 +450,8 @@ def run_training_stage(
                                                hard_neg_weight=hard_neg_weight)
         if use_matryoshka:
             return matryoshka_infonce_loss(q_emb, p_emb, temperature=temperature)
+        if batch_size >= 128 and not symmetric and false_neg_threshold <= 0:
+            return infonce_loss_tiled(q_emb, p_emb, temperature=temperature, tile_size=64)
         return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric,
                            false_neg_threshold=false_neg_threshold)
 
@@ -921,6 +967,16 @@ def main():
     print(f"Checkpoint saved: {ckpt_dir}")
 
     # ---- Evaluation ----
+    # Finish wandb BEFORE eval — wandb's background sync thread competes with
+    # Metal GPU resources and causes eval to deadlock on encode_sentences
+    try:
+        import wandb
+        if wandb.run is not None:
+            wandb.finish()
+            print("[wandb] Finished before eval (prevents Metal deadlock)")
+    except Exception:
+        pass
+
     print("\nRunning MTEB evaluation...")
 
     eval_tasks = QUICK_TASKS if args.quick_eval_only else FULL_TASKS
@@ -991,17 +1047,8 @@ def main():
         with open(manifest_path, "a") as f:
             f.write(json.dumps(manifest_entry) + "\n")
 
-    try:
-        import wandb
-        if wandb.run is not None:
-            wandb.log({"primary_score": primary, "sts_avg": float(sts_avg),
-                        "pair_class_avg": float(pair_avg), "cluster_avg": float(cluster_avg),
-                        "retrieval_avg": float(retrieval_avg)})
-            for task, score in scores.items():
-                wandb.log({f"mteb/{task}": score})
-            wandb.finish()
-    except Exception as e:
-        print(f"wandb finish failed (non-fatal): {e}")
+    # wandb was finished before eval to prevent Metal deadlock.
+    # Results are logged to results.jsonl by experiment.py instead.
     # === END result.json output ===
 
     print("\n---")
