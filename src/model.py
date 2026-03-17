@@ -310,16 +310,7 @@ class EmbeddingModel(nn.Module):
             emb = self(input_ids, attention_mask)
             mx.eval(emb)
             out[i:i + len(batch)] = np.array(emb, copy=False)
-            # Free MLX arrays and clear Metal cache periodically
             del input_ids, attention_mask, emb
-            if (i // batch_size) % 10 == 0:
-                try:
-                    mx.clear_cache()
-                except AttributeError:
-                    try:
-                        mx.metal.clear_cache()
-                    except Exception:
-                        pass
 
         return out
 
