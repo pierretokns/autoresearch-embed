@@ -49,15 +49,31 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
 # ---- MLX Loss Functions ----
 
 def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05,
-                 symmetric: bool = False) -> mx.array:
-    """InfoNCE loss with in-batch negatives. symmetric=True adds positive→query direction."""
+                 symmetric: bool = False, false_neg_threshold: float = 0.0) -> mx.array:
+    """InfoNCE loss with in-batch negatives and optional false-negative masking.
+
+    false_neg_threshold: if > 0, mask off-diagonal pairs with cosine sim above threshold
+    using -1e9 (NOT -inf, which causes NaN in logsumexp when all entries are masked)."""
     sim = mx.matmul(query_emb, positive_emb.T) / temperature
-    labels = mx.arange(sim.shape[0])
+    B = sim.shape[0]
+    labels = mx.arange(B)
+
+    if false_neg_threshold > 0.0:
+        raw_sim = mx.matmul(query_emb, positive_emb.T)
+        diag_mask = mx.eye(B)
+        false_neg_mask = (raw_sim > false_neg_threshold) * (1.0 - diag_mask)
+        sim = sim + false_neg_mask * mx.array(-1e9)  # -1e9 not -inf to avoid NaN
+
     lse = mx.logsumexp(sim, axis=1, keepdims=True)
-    loss_fwd = -mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels])
+    loss_fwd = -mx.mean((sim - lse)[mx.arange(B), labels])
     if symmetric:
-        lse_bwd = mx.logsumexp(sim.T, axis=1, keepdims=True)
-        loss_bwd = -mx.mean((sim.T - lse_bwd)[mx.arange(sim.shape[1]), labels])
+        if false_neg_threshold > 0.0:
+            sim_bwd = mx.matmul(positive_emb, query_emb.T) / temperature
+            sim_bwd = sim_bwd + false_neg_mask.T * mx.array(-1e9)
+        else:
+            sim_bwd = sim.T
+        lse_bwd = mx.logsumexp(sim_bwd, axis=1, keepdims=True)
+        loss_bwd = -mx.mean((sim_bwd - lse_bwd)[mx.arange(B), labels])
         return (loss_fwd + loss_bwd) * 0.5
     return loss_fwd
 
@@ -336,6 +352,7 @@ def run_training_stage(
     symmetric = bool(stage_cfg.get("symmetric", False))
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
     use_instructions = bool(stage_cfg.get("instruction_prefix", False))
+    false_neg_threshold = float(stage_cfg.get("false_neg_threshold", 0.0))
 
     # Task-specific instruction prefixes mapped by data source
     QUERY_PREFIXES = {
@@ -389,7 +406,8 @@ def run_training_stage(
                                                hard_neg_weight=hard_neg_weight)
         if use_matryoshka:
             return matryoshka_infonce_loss(q_emb, p_emb, temperature=temperature)
-        return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric)
+        return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric,
+                           false_neg_threshold=false_neg_threshold)
 
     loss_grad_fn = nn.value_and_grad(model, loss_fn)
 
