@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 60  # match exp-67 baseline
+    duration_minutes: 90  # extend training (exp-82 used 60 min)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05
@@ -63,7 +63,7 @@ optimizer:
   ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
 
 data:
-  max_rows_per_dataset: 100000  # scale up from 30K (exp-82 baseline) → ~2x more data for large datasets
+  max_rows_per_dataset: 30000  # revert to exp-82 baseline
 
 memory:
   max_peak_gb: 55
