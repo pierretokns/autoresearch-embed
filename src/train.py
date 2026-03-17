@@ -500,7 +500,7 @@ def run_training_stage(
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
 
             # Grad clipping
-            grads, _ = optim.clip_grad_norm(grads, max_norm=1.0)
+            grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)  # element-wise: 2x faster than L2 norm on MLX
 
             # LLRD: scale gradients per layer + manual weight decay
             if hasattr(optimizer, '_llrd_ratios'):
