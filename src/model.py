@@ -295,8 +295,13 @@ class EmbeddingModel(nn.Module):
         """MTEB-compatible encode method. Returns numpy array of L2-normalized embeddings."""
         import numpy as np
 
-        all_embs = []
-        for i in range(0, len(sentences), batch_size):
+        n = len(sentences)
+        if n == 0:
+            return np.zeros((0, self.output_dim), dtype=np.float32)
+
+        # Pre-allocate output to avoid list accumulation + concatenation memory spike
+        out = np.empty((n, self.output_dim), dtype=np.float32)
+        for i in range(0, n, batch_size):
             batch = sentences[i:i + batch_size]
             enc = tokenizer(batch, padding=True, truncation=True,
                             max_length=max_length, return_tensors="np")
@@ -304,9 +309,19 @@ class EmbeddingModel(nn.Module):
             attention_mask = mx.array(enc["attention_mask"])
             emb = self(input_ids, attention_mask)
             mx.eval(emb)
-            all_embs.append(np.array(emb, copy=False))
+            out[i:i + len(batch)] = np.array(emb, copy=False)
+            # Free MLX arrays and clear Metal cache periodically
+            del input_ids, attention_mask, emb
+            if (i // batch_size) % 10 == 0:
+                try:
+                    mx.clear_cache()
+                except AttributeError:
+                    try:
+                        mx.metal.clear_cache()
+                    except Exception:
+                        pass
 
-        return np.concatenate(all_embs, axis=0).astype(np.float32)
+        return out
 
 
 def load_from_safetensors(model: EmbeddingModel, model_id: str = "answerdotai/ModernBERT-base"):

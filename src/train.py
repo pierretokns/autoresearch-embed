@@ -559,38 +559,58 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
                 if not sentences and batch:
                     sentences = list(batch.values())[0]
                 if sentences:
-                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=64)
+                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=16)
                     all_embs.append(emb)
             if all_embs:
                 return np.concatenate(all_embs, axis=0)
-            return np.zeros((0, self.model.output_dim))
+            return np.zeros((0, self.model.output_dim), dtype=np.float32)
 
     wrapper = ModelWrapper(model, tokenizer)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    task_objects = mteb.get_tasks(tasks=tasks, languages=["eng"])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        ev = mteb.MTEB(tasks=task_objects)
-        results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
+    import signal
+    TASK_TIMEOUT = 600  # 10 min per task (RedditClustering needs ~7 min)
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError("MTEB task timed out")
 
     scores = {}
-    for task_result in results:
-        task_name = getattr(task_result, 'task_name', None)
-        if task_name is None:
+    for task_name in tasks:
+        print(f"  Evaluating: {task_name}...", flush=True)
+        try:
+            task_objs = mteb.get_tasks(tasks=[task_name], languages=["eng"])
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(TASK_TIMEOUT)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                ev = mteb.MTEB(tasks=task_objs)
+                task_results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        except TimeoutError:
+            print(f"  WARNING: {task_name} timed out after {TASK_TIMEOUT}s, skipping", flush=True)
+            signal.alarm(0)
             continue
-        if hasattr(task_result, 'scores'):
-            for split_name in ["test", "validation", "dev"]:
-                if split_name in task_result.scores:
-                    split_scores = task_result.scores[split_name]
-                    if isinstance(split_scores, list) and split_scores:
-                        score = split_scores[0].get("main_score", 0)
-                    elif isinstance(split_scores, dict):
-                        score = split_scores.get("main_score", 0)
-                    else:
-                        score = 0
-                    scores[task_name] = float(score) * 100
-                    break
+        except Exception as e:
+            print(f"  WARNING: {task_name} failed: {e}", flush=True)
+            continue
+        for task_result in task_results:
+            tn = getattr(task_result, 'task_name', None)
+            if tn is None:
+                continue
+            if hasattr(task_result, 'scores'):
+                for split_name in ["test", "validation", "dev"]:
+                    if split_name in task_result.scores:
+                        split_scores = task_result.scores[split_name]
+                        if isinstance(split_scores, list) and split_scores:
+                            score = split_scores[0].get("main_score", 0)
+                        elif isinstance(split_scores, dict):
+                            score = split_scores.get("main_score", 0)
+                        else:
+                            score = 0
+                        scores[tn] = float(score) * 100
+                        print(f"  {tn}: {scores[tn]:.2f}", flush=True)
+                        break
 
     if not scores:
         for task_name in tasks:
