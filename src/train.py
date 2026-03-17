@@ -500,7 +500,7 @@ def run_training_stage(
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
 
             # Grad clipping
-            grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
+            grads, _ = optim.clip_grad_norm(grads, max_norm=1.0)
 
             # LLRD: scale gradients per layer + manual weight decay
             if hasattr(optimizer, '_llrd_ratios'):
@@ -633,7 +633,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     import signal
-    TASK_TIMEOUT = 600  # 10 min per task (RedditClustering needs ~7 min)
+    TASK_TIMEOUT = 900  # 15 min per task (RedditClustering needs ~12 min with k-means)
 
     def _timeout_handler(signum, frame):
         raise TimeoutError("MTEB task timed out")
