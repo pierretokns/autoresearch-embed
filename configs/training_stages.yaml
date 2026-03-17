@@ -22,13 +22,12 @@ stages:
     negatives: "in_batch_only"
     freeze_encoder_layers: 0  # freeze first N layers
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
-    symmetric: true  # bidirectional InfoNCE
 
   contrastive:
-    duration_minutes: 90  # extended training (exp-84: 57.89 at 90min vs 57.72 at 60min)
+    duration_minutes: 90  # extended training (exp-84: 57.89)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05
+    temperature: 0.02  # lower temp = sharper distribution = harder contrastive learning (was 0.05)
     learning_rate: 5.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
@@ -36,7 +35,6 @@ stages:
     negatives: "in_batch_plus_explicit"
     source_stratification: true
     false_neg_threshold: 0.0
-    symmetric: true  # bidirectional InfoNCE: query→positive + positive→query
 
   hard_neg_mining:
     duration_minutes: 5
