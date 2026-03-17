@@ -47,33 +47,15 @@ def load_config(path: str = DEFAULT_CONFIG) -> dict:
 # ---- MLX Loss Functions ----
 
 def infonce_loss(query_emb: mx.array, positive_emb: mx.array, temperature: float = 0.05,
-                 symmetric: bool = False, false_neg_threshold: float = 0.0) -> mx.array:
-    """InfoNCE loss with in-batch negatives.
-    symmetric=True adds positive→query direction.
-    false_neg_threshold: if > 0, mask out in-batch negatives with cosine sim above this threshold
-    to avoid penalizing semantically similar pairs as negatives."""
-    sim_raw = mx.matmul(query_emb, positive_emb.T)  # cosine sim (inputs are L2-normalized)
-    sim = sim_raw / temperature
-    B = sim.shape[0]
-    labels = mx.arange(B)
-
-    # False negative filtering: mask high-similarity off-diagonal pairs
-    if false_neg_threshold > 0:
-        # Create mask: -inf for false negatives (high sim, not the positive pair)
-        identity = mx.eye(B)
-        is_false_neg = (sim_raw > false_neg_threshold) * (1 - identity)  # high sim AND not the diagonal
-        fn_mask = mx.where(is_false_neg, mx.array(float("-inf")), mx.array(0.0))
-        sim = sim + fn_mask
-
+                 symmetric: bool = False) -> mx.array:
+    """InfoNCE loss with in-batch negatives. symmetric=True adds positive→query direction."""
+    sim = mx.matmul(query_emb, positive_emb.T) / temperature
+    labels = mx.arange(sim.shape[0])
     lse = mx.logsumexp(sim, axis=1, keepdims=True)
-    loss_fwd = -mx.mean((sim - lse)[mx.arange(B), labels])
+    loss_fwd = -mx.mean((sim - lse)[mx.arange(sim.shape[0]), labels])
     if symmetric:
-        if false_neg_threshold > 0:
-            sim_bwd = sim_raw.T / temperature + fn_mask.T
-        else:
-            sim_bwd = sim.T
-        lse_bwd = mx.logsumexp(sim_bwd, axis=1, keepdims=True)
-        loss_bwd = -mx.mean((sim_bwd - lse_bwd)[mx.arange(B), labels])
+        lse_bwd = mx.logsumexp(sim.T, axis=1, keepdims=True)
+        loss_bwd = -mx.mean((sim.T - lse_bwd)[mx.arange(sim.shape[1]), labels])
         return (loss_fwd + loss_bwd) * 0.5
     return loss_fwd
 
@@ -92,8 +74,8 @@ def matryoshka_infonce_loss(
         q_trunc = query_emb[:, :d]
         p_trunc = positive_emb[:, :d]
         # Re-normalize truncated embeddings
-        q_trunc = q_trunc / mx.sqrt(mx.sum(q_trunc * q_trunc, axis=-1, keepdims=True) + 1e-8)
-        p_trunc = p_trunc / mx.sqrt(mx.sum(p_trunc * p_trunc, axis=-1, keepdims=True) + 1e-8)
+        q_trunc = q_trunc / mx.sqrt(mx.sum(q_trunc * q_trunc, axis=-1, keepdims=True) + 1e-12)
+        p_trunc = p_trunc / mx.sqrt(mx.sum(p_trunc * p_trunc, axis=-1, keepdims=True) + 1e-12)
         sim = mx.matmul(q_trunc, p_trunc.T) / temperature
         labels = mx.arange(sim.shape[0])
         lse = mx.logsumexp(sim, axis=1, keepdims=True)
@@ -103,27 +85,16 @@ def matryoshka_infonce_loss(
 
 def infonce_loss_with_hard_negs(
     query_emb: mx.array, positive_emb: mx.array, hard_neg_emb: mx.array,
-    temperature: float = 0.05, hard_neg_weight: float = 1.0,
+    temperature: float = 0.05, hard_neg_weight: float = 2.0,
 ) -> mx.array:
-    """InfoNCE with in-batch negatives plus explicit hard negatives.
-    hard_neg_weight scales the hard neg LOSS contribution (not logits).
-    Weighted combination: (1-α)·InfoNCE_inbatch + α·InfoNCE_with_hardnegs where α=hard_neg_weight/(1+hard_neg_weight)."""
+    """InfoNCE with in-batch negatives plus explicit hard negatives."""
     B = query_emb.shape[0]
-    # Standard InfoNCE with in-batch negatives only
     sim_inbatch = mx.matmul(query_emb, positive_emb.T) / temperature
+    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature * hard_neg_weight
+    logits = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
     labels = mx.arange(B)
-    lse_inbatch = mx.logsumexp(sim_inbatch, axis=1, keepdims=True)
-    loss_inbatch = -mx.mean((sim_inbatch - lse_inbatch)[mx.arange(B), labels])
-
-    # InfoNCE with in-batch + hard negatives concatenated
-    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
-    logits_all = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
-    lse_all = mx.logsumexp(logits_all, axis=1, keepdims=True)
-    loss_with_hardnegs = -mx.mean((logits_all - lse_all)[mx.arange(B), labels])
-
-    # Weighted combination: weight=0 → pure in-batch, weight=1 → equal mix
-    alpha = hard_neg_weight / (1.0 + hard_neg_weight)
-    return (1 - alpha) * loss_inbatch + alpha * loss_with_hardnegs
+    log_softmax = logits - mx.logsumexp(logits, axis=1, keepdims=True)
+    return -mx.mean(log_softmax[mx.arange(B), labels])
 
 
 # ---- Data Loading ----
@@ -352,20 +323,16 @@ def run_training_stage(
     stage_cfg: dict,
     optimizer,
     stage_name: str,
-    max_seq_length: int = 256,
-    grad_accum_steps: int = 1,
-    ema_state: dict | None = None,
 ):
     """Run one training stage for the configured duration using MLX value_and_grad."""
     duration_s = float(stage_cfg.get("duration_minutes", 10)) * 60
     batch_size = int(stage_cfg.get("batch_size", 128))
     temperature = float(stage_cfg.get("temperature", 0.05))
-    max_seq_len = max_seq_length
+    max_seq_len = 256
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
     use_instructions = bool(stage_cfg.get("instruction_prefix", False))
-    false_neg_threshold = float(stage_cfg.get("false_neg_threshold", 0.0))
 
     # Task-specific instruction prefixes mapped by data source
     QUERY_PREFIXES = {
@@ -401,8 +368,6 @@ def run_training_stage(
     stage_start = time.time()
     step = 0
     total_loss = 0.0
-    accum_grads = None
-    accum_count = 0
 
     print(f"\n=== Stage: {stage_name} ({stage_cfg.get('duration_minutes', 10)} min) ===")
 
@@ -420,8 +385,7 @@ def run_training_stage(
                                                hard_neg_weight=hard_neg_weight)
         if use_matryoshka:
             return matryoshka_infonce_loss(q_emb, p_emb, temperature=temperature)
-        return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric,
-                           false_neg_threshold=false_neg_threshold)
+        return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric)
 
     loss_grad_fn = nn.value_and_grad(model, loss_fn)
 
@@ -454,7 +418,7 @@ def run_training_stage(
 
             # Check for hard negatives
             has_hard_negs = any(t.get("negatives") for t in batch)
-            if has_hard_negs and hard_neg_weight > 0.0:
+            if has_hard_negs and hard_neg_weight > 1.0:
                 negs_text = []
                 for t in batch:
                     negs = t.get("negatives", [])
@@ -467,63 +431,23 @@ def run_training_stage(
             else:
                 loss, grads = loss_grad_fn(model, q_ids, q_mask, p_ids, p_mask)
 
-            # Track loss for all micro-batches
-            micro_loss = float(loss.item())
-            total_loss += micro_loss
-
-            # Gradient accumulation
-            if grad_accum_steps > 1:
-                if accum_grads is None:
-                    accum_grads = grads
-                else:
-                    accum_grads = tree_map(lambda a, g: a + g, accum_grads, grads)
-                accum_count += 1
-
-                if accum_count < grad_accum_steps:
-                    mx.eval(accum_grads)
-                    continue
-
-                # Average accumulated gradients and apply
-                grads = tree_map(lambda g: g / grad_accum_steps, accum_grads)
-                accum_grads = None
-                accum_count = 0
-
             # Grad clipping
             grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
 
             # Update LR according to schedule (time-based for accuracy)
             if lr_schedule != "constant":
-                current_lr = get_lr_by_time(time.time() - stage_start)
-                if not hasattr(optimizer, '_llrd_ratios'):
-                    optimizer.learning_rate = current_lr
-
-            # Apply LLRD: scale gradients by per-param ratio (optimizer keeps correct base LR)
-            if hasattr(optimizer, '_llrd_ratios'):
-                ratios = optimizer._llrd_ratios
-                flat_grads = tree_flatten(grads)
-                scaled_flat = [(k, g * ratios.get(k, 1.0)) for k, g in flat_grads]
-                from mlx.utils import tree_unflatten
-                grads = tree_unflatten(scaled_flat)
+                optimizer.learning_rate = get_lr_by_time(time.time() - stage_start)
 
             optimizer.update(model, grads)
             mx.eval(model.parameters(), optimizer.state, loss)
 
-            # EMA update (per optimizer step, not per micro-batch)
-            if ema_state is not None:
-                decay = ema_state["decay"]
-                ema_w = ema_state["weights"]
-                for k, v in tree_flatten(model.parameters()):
-                    if k in ema_w:
-                        ema_w[k] = decay * ema_w[k] + (1 - decay) * v
-                if step % 100 == 0:
-                    mx.eval(list(ema_w.values()))
-
             step += 1
-            micro_steps = step * max(grad_accum_steps, 1)  # total micro-batches processed
+            loss_val = float(loss.item())
+            total_loss += loss_val
 
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
-                avg_loss = total_loss / micro_steps
+                avg_loss = total_loss / step
                 print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                 try:
                     import wandb
@@ -535,8 +459,7 @@ def run_training_stage(
         random.shuffle(data)
 
     stage_time = time.time() - stage_start
-    total_micro = step * max(grad_accum_steps, 1)
-    avg_loss = total_loss / max(total_micro, 1)
+    avg_loss = total_loss / max(step, 1)
     print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s", flush=True)
     return step
 
@@ -609,7 +532,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
                 if not sentences and batch:
                     sentences = list(batch.values())[0]
                 if sentences:
-                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=256)
+                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=64)
                     all_embs.append(emb)
             if all_embs:
                 return np.concatenate(all_embs, axis=0)
@@ -618,54 +541,30 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
     wrapper = ModelWrapper(model, tokenizer)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    import signal
-    TASK_TIMEOUT = 600  # 10 minutes per task (RedditClustering needs >5min)
-
-    def _timeout_handler(signum, frame):
-        raise TimeoutError("MTEB task timed out")
+    task_objects = mteb.get_tasks(tasks=tasks, languages=["eng"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        ev = mteb.MTEB(tasks=task_objects)
+        results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
 
     scores = {}
-    for task_name in tasks:
-        print(f"  Evaluating: {task_name}...", flush=True)
-        try:
-            task_objects = mteb.get_tasks(tasks=[task_name], languages=["eng"])
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(TASK_TIMEOUT)
-
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                ev = mteb.MTEB(tasks=task_objects)
-                results = ev.run(wrapper, output_folder=output_dir, overwrite_results=True)
-
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
-
-            for task_result in results:
-                tn = getattr(task_result, 'task_name', None)
-                if tn is None:
-                    continue
-                if hasattr(task_result, 'scores'):
-                    for split_name in ["test", "validation", "dev"]:
-                        if split_name in task_result.scores:
-                            split_scores = task_result.scores[split_name]
-                            if isinstance(split_scores, list) and split_scores:
-                                score = split_scores[0].get("main_score", 0)
-                            elif isinstance(split_scores, dict):
-                                score = split_scores.get("main_score", 0)
-                            else:
-                                score = 0
-                            scores[tn] = float(score) * 100
-                            print(f"  {tn}: {scores[tn]:.2f}", flush=True)
-                            break
-        except TimeoutError:
-            print(f"  WARNING: {task_name} timed out after {TASK_TIMEOUT}s, skipping", flush=True)
-            signal.alarm(0)
+    for task_result in results:
+        task_name = getattr(task_result, 'task_name', None)
+        if task_name is None:
             continue
-        except Exception as e:
-            print(f"  WARNING: {task_name} failed: {e}", flush=True)
-            continue
+        if hasattr(task_result, 'scores'):
+            for split_name in ["test", "validation", "dev"]:
+                if split_name in task_result.scores:
+                    split_scores = task_result.scores[split_name]
+                    if isinstance(split_scores, list) and split_scores:
+                        score = split_scores[0].get("main_score", 0)
+                    elif isinstance(split_scores, dict):
+                        score = split_scores.get("main_score", 0)
+                    else:
+                        score = 0
+                    scores[task_name] = float(score) * 100
+                    break
 
-    # Fallback: parse from output files if results parsing failed
     if not scores:
         for task_name in tasks:
             result_files = list(Path(output_dir).rglob(f"*{task_name}*.json"))
@@ -758,8 +657,6 @@ def main():
         bert_config,
         projection_dim=config.get("projection_dim"),
         pooling=config.get("pooling", "mean"),
-        normalize=config.get("normalize_embeddings", True),
-        simclr_head=config.get("simclr_head", False),
     )
     model = load_from_safetensors(model, model_name)
     mx.eval(model.parameters())
@@ -770,20 +667,7 @@ def main():
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    max_seq_length = int(config.get("max_seq_length", 256))
-    grad_accum_steps = int(config.get("memory", {}).get("gradient_accumulation_steps", 1))
-    use_grad_ckpt = config.get("memory", {}).get("gradient_checkpointing", False)
-    print(f"[config] max_seq_length={max_seq_length}, grad_accum_steps={grad_accum_steps}, grad_ckpt={use_grad_ckpt}")
-
-    # Enable gradient checkpointing to reduce activation memory (~80% savings)
-    if use_grad_ckpt:
-        model.encoder.gradient_checkpointing = True
-
-    # EMA setup is deferred until after opt_cfg is defined (see below)
-    ema_state = None
-
-    max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
-    ds_key = hashlib.sha256(json.dumps({"datasets": DATASETS, "max_rows": max_rows}, sort_keys=True).encode()).hexdigest()[:12]
+    ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -794,7 +678,7 @@ def main():
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
-        triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
+        triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
 
         print("Building MTEB test LSH for decontamination...")
@@ -841,114 +725,35 @@ def main():
             return False
         return STAGE_ORDER.index(stage_name) < STAGE_ORDER.index(resume_stage)
 
-    # ---- Helper: filter data by stage config ----
-    def select_stage_data(stage_cfg: dict, all_triplets: list) -> list:
-        """Select training data based on stage config 'data' field."""
-        data_spec = stage_cfg.get("data", "all_curated")
-        if data_spec == "all_curated" or data_spec == "all_curated_with_hard_negs":
-            return all_triplets
-        elif data_spec == "qqp_se_paraphrase":
-            filtered = [t for t in all_triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
-            return filtered if filtered else all_triplets
-        else:
-            # Try matching source name directly
-            filtered = [t for t in all_triplets if data_spec in t.get("source", "")]
-            return filtered if filtered else all_triplets
-
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
-    warmup_data = select_stage_data(warmup_cfg, triplets)
+    warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
+    if not warmup_data:
+        warmup_data = triplets
 
     warmup_lr = float(warmup_cfg.get("learning_rate", 1e-4))
-    opt_cfg = config.get("optimizer", {})
-    weight_decay = float(opt_cfg.get("weight_decay", 0.01))
-    opt_betas = opt_cfg.get("betas", [0.9, 0.999])
-    opt_eps = float(opt_cfg.get("eps", 1e-8))
-    print(f"[config] optimizer: weight_decay={weight_decay}, betas={opt_betas}, eps={opt_eps}")
-
-    llrd_decay = float(opt_cfg.get("llrd_decay", 1.0))  # 1.0 = no decay, 0.95 = typical
-
-    def make_optimizer(lr):
-        if llrd_decay < 1.0:
-            # Layer-wise learning rate decay: lower layers get smaller LR
-            # We scale gradients by (layer_lr / base_lr) so the optimizer's single LR
-            # still applies correctly, and weight_decay scales proportionally.
-            num_layers = len(model.encoder.layers)
-
-            all_params = dict(tree_flatten(model.parameters()))
-            llrd_ratios = {}  # param_name → lr_ratio (multiply gradient by this)
-
-            # Embeddings get lowest ratio
-            embed_ratio = llrd_decay ** (num_layers + 1)
-            for k in all_params:
-                if k.startswith("encoder.tok_embeddings") or k.startswith("encoder.embedding_norm"):
-                    llrd_ratios[k] = embed_ratio
-
-            # Each layer gets progressively higher ratio
-            for i in range(num_layers):
-                ratio = llrd_decay ** (num_layers - i)
-                for k in all_params:
-                    if k.startswith(f"encoder.layers.{i}"):
-                        llrd_ratios[k] = ratio
-
-            # Head params (final_norm, pooling, projection) get ratio=1.0 (full LR)
-            # No entry needed — default is 1.0
-
-            print(f"[config] LLRD: decay={llrd_decay}, embed_ratio={embed_ratio:.4f}, layer0_ratio={llrd_decay**num_layers:.4f}, top_layer_ratio={llrd_decay:.4f}")
-            opt = optim.AdamW(learning_rate=lr, weight_decay=weight_decay,
-                              betas=opt_betas, eps=opt_eps)
-            opt._llrd_ratios = llrd_ratios
-            return opt
-        else:
-            return optim.AdamW(learning_rate=lr, weight_decay=weight_decay,
-                               betas=opt_betas, eps=opt_eps)
-
-    optimizer = make_optimizer(warmup_lr)
-
-    # EMA: maintain exponential moving average of weights for evaluation
-    ema_decay = float(opt_cfg.get("ema_decay", 0.0))
-    if ema_decay > 0:
-        ema_w = {k: mx.array(v) for k, v in tree_flatten(model.parameters())}
-        ema_state = {"decay": ema_decay, "weights": ema_w}
-        print(f"[config] EMA enabled: decay={ema_decay}")
-
-    # ---- Freeze encoder layers if configured ----
-    freeze_n = int(warmup_cfg.get("freeze_encoder_layers", 0))
-    if freeze_n > 0:
-        for i in range(min(freeze_n, len(model.encoder.layers))):
-            model.encoder.layers[i].freeze()
-        print(f"[config] Froze first {freeze_n} encoder layers")
+    weight_decay = float(config.get("optimizer", {}).get("weight_decay", 0.01))
+    optimizer = optim.AdamW(learning_rate=warmup_lr, weight_decay=weight_decay)
 
     train_start = time.time()
-
-    # Enable SimCLR projection head during training (skipped at eval)
-    model.training_mode = True
-    if config.get("simclr_head", False):
-        print(f"[config] SimCLR projection head enabled (train-only)")
 
     if should_skip("warmup"):
         print("=== Stage: warmup — SKIPPED (--resume-stage) ===", flush=True)
     elif warmup_data:
-        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup", max_seq_length, grad_accum_steps, ema_state)
+        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup")
         save_stage_checkpoint("warmup")
-
-    # Unfreeze all layers for subsequent stages
-    if freeze_n > 0:
-        for i in range(min(freeze_n, len(model.encoder.layers))):
-            model.encoder.layers[i].unfreeze()
-        print(f"[config] Unfroze encoder layers for contrastive stage")
 
     # ---- Stage 2: Full contrastive ----
     contrastive_cfg = stages.get("contrastive", {})
     contrastive_lr = float(contrastive_cfg.get("learning_rate", 5e-5))
-    optimizer = make_optimizer(contrastive_lr)
+    optimizer = optim.AdamW(learning_rate=contrastive_lr, weight_decay=weight_decay)
 
     if should_skip("contrastive"):
         print("=== Stage: contrastive — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets:
         if resume_stage == "contrastive":
             load_stage_checkpoint("warmup")
-        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive", max_seq_length, grad_accum_steps, ema_state)
+        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
         save_stage_checkpoint("contrastive")
 
     # Free MLX memory before hard negative mining (inference mode)
@@ -958,8 +763,6 @@ def main():
         pass
 
     # ---- Stage 3: Hard negative mining ----
-    # Mining is inference — disable SimCLR head to use raw encoder embeddings
-    model.training_mode = False
     mining_cfg = stages.get("hard_neg_mining", {})
     if should_skip("mining"):
         print("=== Stage: hard_neg_mining — SKIPPED (--resume-stage) ===", flush=True)
@@ -967,11 +770,8 @@ def main():
     elif triplets:
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
-        # Use shuffled subset for mining (avoid bias toward early-loaded datasets)
-        mining_max = int(mining_cfg.get("max_samples", 8000))
-        mining_pool = list(triplets)
-        random.shuffle(mining_pool)
-        mining_triplets = mining_pool[:mining_max]
+        # Use subset for mining to avoid OOM on 64GB system
+        mining_triplets = triplets[:8000]
         mining_bs = int(mining_cfg.get("batch_size", 32))
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
@@ -983,17 +783,16 @@ def main():
         triplets_with_negs = triplets
 
     # ---- Stage 4: Hard negative fine-tuning ----
-    model.training_mode = True  # re-enable SimCLR head for fine-tuning
     finetuning_cfg = stages.get("fine_tuning", {})
     finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
-    optimizer = make_optimizer(finetuning_lr)
+    optimizer = optim.AdamW(learning_rate=finetuning_lr, weight_decay=weight_decay)
 
     if should_skip("finetune"):
         print("=== Stage: fine_tuning — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets_with_negs:
         if resume_stage == "finetune":
             load_stage_checkpoint("mining")
-        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning", max_seq_length, grad_accum_steps, ema_state)
+        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning")
         save_stage_checkpoint("finetune")
 
     # Load latest checkpoint if resuming directly to eval
@@ -1022,26 +821,6 @@ def main():
 
     # ---- Evaluation ----
     print("\nRunning MTEB evaluation...")
-
-    # Swap in EMA weights for evaluation (better generalization)
-    train_weights = None
-    if ema_state is not None:
-        from mlx.utils import tree_unflatten
-        train_weights = dict(tree_flatten(model.parameters()))
-        ema_w = ema_state["weights"]
-        mx.eval(list(ema_w.values()))
-        model.load_weights(list(ema_w.items()))
-        mx.eval(model.parameters())
-        print("[EMA] Loaded EMA weights for evaluation")
-
-    # Disable SimCLR head and gradient checkpointing for eval
-    model.training_mode = False
-    model.encoder.gradient_checkpointing = False
-    # Free training memory before eval
-    try:
-        mx.metal.clear_cache()
-    except Exception:
-        pass
 
     eval_tasks = QUICK_TASKS if args.quick_eval_only else FULL_TASKS
     eval_outdir = "mteb_results_quick" if args.quick_eval_only else "mteb_results"

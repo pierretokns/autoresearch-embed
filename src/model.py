@@ -13,7 +13,6 @@ from dataclasses import dataclass
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.nn.utils import checkpoint as nn_checkpoint
 
 
 @dataclass
@@ -134,7 +133,7 @@ class ModernBERTLayer(nn.Module):
 
 
 class ModernBERTEncoder(nn.Module):
-    """Full ModernBERT encoder stack with optional gradient checkpointing."""
+    """Full ModernBERT encoder stack."""
 
     def __init__(self, config: ModernBERTConfig):
         super().__init__()
@@ -143,29 +142,15 @@ class ModernBERTEncoder(nn.Module):
         self.embedding_norm = nn.RMSNorm(config.hidden_size)
         self.layers = [ModernBERTLayer(config, i) for i in range(config.num_hidden_layers)]
         self.final_norm = nn.RMSNorm(config.hidden_size)
-        self.gradient_checkpointing = False
-
-    def _build_sliding_window_mask(self, T: int) -> mx.array:
-        """Build banded attention mask for local/sliding window layers.
-        Returns additive mask of shape (1, 1, T, T): 0.0 where allowed, -1e9 where blocked.
-        Uses -1e9 instead of -inf to avoid NaN gradients when padding + window mask
-        combine to create all-masked rows (softmax(-inf,...,-inf) = NaN)."""
-        half_window = self.config.local_attention // 2  # 64 for ModernBERT-base
-        q_idx = mx.arange(T)[:, None]   # (T, 1)
-        kv_idx = mx.arange(T)[None, :]  # (1, T)
-        within_window = mx.abs(q_idx - kv_idx) <= half_window  # (T, T)
-        mask = mx.where(within_window, mx.array(0.0), mx.array(-1e9))
-        return mask[None, None, :, :]    # (1, 1, T, T)
 
     def __call__(self, input_ids: mx.array, attention_mask: mx.array | None = None,
                  return_all_layers: bool = False):
         x = self.tok_embeddings(input_ids)
         x = self.embedding_norm(x)
 
-        # Build attention mask: padding-only for ALL layers (exp-67 style).
-        # Using -inf is correct here since with seq_len=256 and no sliding window,
-        # there are no all-masked rows (NaN issue was from sliding window + padding).
+        # Build attention mask for local attention layers
         if attention_mask is not None:
+            # Convert (B, T) binary mask to additive mask (B, 1, 1, T) for broadcasting
             mask = mx.where(attention_mask[:, None, None, :] == 0,
                             mx.array(float("-inf")), mx.array(0.0))
         else:
@@ -174,19 +159,14 @@ class ModernBERTEncoder(nn.Module):
         if return_all_layers:
             all_hidden = []
             for layer in self.layers:
-                if self.gradient_checkpointing:
-                    x = nn_checkpoint(layer)(x, mask=mask)
-                else:
-                    x = layer(x, mask=mask)
+                x = layer(x, mask=mask)
                 all_hidden.append(x)
+            # Apply final norm only to last layer
             all_hidden[-1] = self.final_norm(all_hidden[-1])
-            return all_hidden
+            return all_hidden  # list of (B, T, H), length = num_layers
         else:
             for layer in self.layers:
-                if self.gradient_checkpointing:
-                    x = nn_checkpoint(layer)(x, mask=mask)
-                else:
-                    x = layer(x, mask=mask)
+                x = layer(x, mask=mask)
             x = self.final_norm(x)
             return x
 
@@ -226,15 +206,14 @@ class LatentAttentionPooling(nn.Module):
         self.num_latents = num_latents
         self.hidden_size = hidden_size
         # Trainable latent queries: (1, K, H)
-        scale = hidden_size ** -0.5
-        self.latents = scale * mx.random.normal((1, num_latents, hidden_size))
+        self.latents = mx.zeros((1, num_latents, hidden_size))
         self.attn = nn.MultiHeadAttention(hidden_size, num_heads, bias=False)
         self.norm = nn.LayerNorm(hidden_size)
 
     def __call__(self, hidden: mx.array, attention_mask: mx.array | None = None) -> mx.array:
         B = hidden.shape[0]
-        # Expand latents to batch (tile ensures proper gradient flow)
-        queries = mx.tile(self.latents, (B, 1, 1))
+        # Expand latents to batch
+        queries = mx.broadcast_to(self.latents, (B, self.num_latents, self.hidden_size))
         # Key/value mask: additive mask (B, 1, K, T) from attention_mask
         if attention_mask is not None:
             kv_mask = mx.where(attention_mask[:, None, None, :] == 0,
@@ -248,36 +227,15 @@ class LatentAttentionPooling(nn.Module):
         return mx.mean(out, axis=1)
 
 
-class SimCLRProjectionHead(nn.Module):
-    """2-layer MLP projection head (SimCLR pattern).
-    During training, loss operates on projected space.
-    During eval, this head is skipped — encoder output is used directly.
-    This absorbs task-specific noise into the head, keeping encoder representations general."""
-
-    def __init__(self, hidden_size: int, proj_size: int = 768):
-        super().__init__()
-        self.linear1 = nn.Linear(hidden_size, hidden_size, bias=True)
-        self.linear2 = nn.Linear(hidden_size, proj_size, bias=True)
-
-    def __call__(self, x: mx.array) -> mx.array:
-        x = self.linear1(x)
-        x = nn.gelu_approx(x)
-        x = self.linear2(x)
-        return x
-
-
 class EmbeddingModel(nn.Module):
     """Wraps ModernBERT encoder with pooling, optional projection, and L2 normalization."""
 
     def __init__(self, config: ModernBERTConfig, projection_dim: int | None = None,
-                 pooling: str = "mean", normalize: bool = True,
-                 simclr_head: bool = False):
+                 pooling: str = "mean"):
         super().__init__()
         self.encoder = ModernBERTEncoder(config)
         self.pooling = pooling
         self.hidden_size = config.hidden_size
-        self.normalize = normalize
-        self.training_mode = False  # toggled by train.py
 
         # Pooling modules (initialized if needed)
         if pooling == "latent_attn":
@@ -289,17 +247,10 @@ class EmbeddingModel(nn.Module):
         else:
             self.layer_pool = None
 
-        # SimCLR projection head: train-only, skipped at eval
-        if simclr_head:
-            proj_dim = projection_dim if projection_dim else config.hidden_size
-            self.simclr_proj = SimCLRProjectionHead(config.hidden_size, proj_dim)
-        else:
-            self.simclr_proj = None
-
         # cls_mean: concatenate CLS + mean → project to output_dim
         input_dim = config.hidden_size * 2 if pooling == "cls_mean" else config.hidden_size
         out_dim = projection_dim if projection_dim else config.hidden_size
-        if not simclr_head and projection_dim and (projection_dim != config.hidden_size or pooling == "cls_mean"):
+        if projection_dim and (projection_dim != config.hidden_size or pooling == "cls_mean"):
             self.projection = nn.Linear(input_dim, out_dim, bias=False)
             self.output_dim = out_dim
         else:
@@ -334,47 +285,28 @@ class EmbeddingModel(nn.Module):
         if self.projection is not None:
             pooled = self.projection(pooled)
 
-        # SimCLR: project during training only (loss on projected space, eval on raw encoder)
-        if self.simclr_proj is not None and self.training_mode:
-            pooled = self.simclr_proj(pooled)
-
         # L2 normalize
-        if self.normalize:
-            norms = mx.sqrt(mx.sum(pooled * pooled, axis=-1, keepdims=True) + 1e-8)
-            pooled = pooled / norms
+        norms = mx.sqrt(mx.sum(pooled * pooled, axis=-1, keepdims=True) + 1e-12)
+        pooled = pooled / norms
         return pooled
 
-    def encode_sentences(self, sentences: list[str], tokenizer, batch_size: int = 128,
+    def encode_sentences(self, sentences: list[str], tokenizer, batch_size: int = 64,
                          max_length: int = 512) -> "numpy.ndarray":
-        """MTEB-compatible encode method. Returns numpy array of L2-normalized embeddings.
-        Sorts by length to minimize padding waste, then restores original order."""
+        """MTEB-compatible encode method. Returns numpy array of L2-normalized embeddings."""
         import numpy as np
 
-        if not sentences:
-            return np.zeros((0, self.output_dim), dtype=np.float32)
-
-        # Sort by length to minimize padding within batches
-        indexed = sorted(enumerate(sentences), key=lambda x: len(x[1]))
-        sorted_indices = [i for i, _ in indexed]
-        sorted_sentences = [s for _, s in indexed]
-
         all_embs = []
-        for i in range(0, len(sorted_sentences), batch_size):
-            batch = sorted_sentences[i:i + batch_size]
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i + batch_size]
             enc = tokenizer(batch, padding=True, truncation=True,
                             max_length=max_length, return_tensors="np")
             input_ids = mx.array(enc["input_ids"])
             attention_mask = mx.array(enc["attention_mask"])
             emb = self(input_ids, attention_mask)
             mx.eval(emb)
-            all_embs.append(np.array(emb, dtype=np.float32))
+            all_embs.append(np.array(emb, copy=False))
 
-        # Restore original order
-        concatenated = np.concatenate(all_embs, axis=0)
-        restore = np.empty_like(sorted_indices)
-        for new_idx, orig_idx in enumerate(sorted_indices):
-            restore[orig_idx] = new_idx
-        return concatenated[restore]
+        return np.concatenate(all_embs, axis=0).astype(np.float32)
 
 
 def load_from_safetensors(model: EmbeddingModel, model_id: str = "answerdotai/ModernBERT-base"):
