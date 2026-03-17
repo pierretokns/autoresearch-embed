@@ -21,10 +21,12 @@ from pathlib import Path
 # Ensure project root is on sys.path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import gc
+
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_flatten, tree_map, tree_unflatten
 import numpy as np
 import yaml
 
@@ -323,6 +325,7 @@ def run_training_stage(
     stage_cfg: dict,
     optimizer,
     stage_name: str,
+    ema_state: dict | None = None,
 ):
     """Run one training stage for the configured duration using MLX value_and_grad."""
     duration_s = float(stage_cfg.get("duration_minutes", 10)) * 60
@@ -373,6 +376,7 @@ def run_training_stage(
 
     data = list(triplets)
     random.shuffle(data)
+    mx.clear_cache()  # Consolidate Metal memory after shuffle
 
     def loss_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids=None, n_mask=None):
         """Compute loss given tokenized inputs."""
@@ -434,29 +438,52 @@ def run_training_stage(
             # Grad clipping
             grads = tree_map(lambda g: mx.clip(g, -1.0, 1.0), grads)
 
+            # LLRD: scale gradients per layer + manual weight decay
+            if hasattr(optimizer, '_llrd_ratios'):
+                ratios = optimizer._llrd_ratios
+                flat_grads = tree_flatten(grads)
+                if hasattr(optimizer, '_llrd_weight_decay') and optimizer._llrd_weight_decay > 0:
+                    wd = optimizer._llrd_weight_decay
+                    flat_params = tree_flatten(model.parameters())
+                    scaled = [(k, ratios.get(k, 1.0) * g + wd * ratios.get(k, 1.0) * p)
+                              for (k, g), (_, p) in zip(flat_grads, flat_params)]
+                else:
+                    scaled = [(k, ratios.get(k, 1.0) * g) for k, g in flat_grads]
+                grads = tree_unflatten(scaled)
+
             # Update LR according to schedule (time-based for accuracy)
             if lr_schedule != "constant":
                 optimizer.learning_rate = get_lr_by_time(time.time() - stage_start)
 
             optimizer.update(model, grads)
-            mx.eval(model.parameters(), optimizer.state, loss)
+            # EMA update (per optimizer step, not per micro-batch)
+            if ema_state is not None:
+                decay = ema_state["decay"]
+                ema_w = ema_state["weights"]
+                for k, v in tree_flatten(model.parameters()):
+                    if k in ema_w:
+                        ema_w[k] = decay * ema_w[k] + (1 - decay) * v
+                mx.eval(model.parameters(), optimizer.state, loss, *list(ema_w.values()))
+            else:
+                mx.eval(model.parameters(), optimizer.state, loss)
 
             step += 1
-            loss_val = float(loss.item())
-            total_loss += loss_val
+            micro_loss = float(loss.item())
+            total_loss += micro_loss
 
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
                 avg_loss = total_loss / step
-                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
+                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | last={micro_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                 try:
                     import wandb
                     if wandb.run is not None:
-                        wandb.log({"loss": loss_val, "avg_loss": avg_loss, "step": step, "stage": stage_name})
+                        wandb.log({"loss": micro_loss, "avg_loss": avg_loss, "step": step, "stage": stage_name})
                 except Exception:
                     pass
 
         random.shuffle(data)
+        mx.clear_cache()  # Consolidate Metal memory after shuffle
 
     stage_time = time.time() - stage_start
     avg_loss = total_loss / max(step, 1)
@@ -629,6 +656,8 @@ def main():
     np.random.seed(42)
     mx.random.seed(42)
 
+    gc.disable()  # Prevent GC pauses during training (500K+ Python objects)
+
     config = load_config(args.config)
     total_start = time.time()
 
@@ -667,8 +696,7 @@ def main():
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
-    ds_key = hashlib.sha256(json.dumps({"datasets": DATASETS, "max_rows": max_rows}, sort_keys=True).encode()).hexdigest()[:12]
+    ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -679,7 +707,7 @@ def main():
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
-        triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
+        triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
 
         print("Building MTEB test LSH for decontamination...")
@@ -726,6 +754,40 @@ def main():
             return False
         return STAGE_ORDER.index(stage_name) < STAGE_ORDER.index(resume_stage)
 
+    opt_cfg = config.get("optimizer", {})
+    weight_decay = float(opt_cfg.get("weight_decay", 0.01))
+    opt_betas = tuple(opt_cfg.get("betas", [0.9, 0.999]))
+    opt_eps = float(opt_cfg.get("eps", 1e-8))
+    llrd_decay = float(opt_cfg.get("llrd_decay", 1.0))
+    ema_decay_val = float(opt_cfg.get("ema_decay", 0.0))
+
+    def make_optimizer(lr: float) -> optim.AdamW:
+        """Create AdamW optimizer, with LLRD per-layer ratio metadata when active."""
+        if llrd_decay < 1.0:
+            opt = optim.AdamW(learning_rate=lr, weight_decay=0.0, betas=opt_betas, eps=opt_eps)
+            # Build per-layer LR ratios for gradient scaling
+            num_layers = len(model.encoder.layers)
+            ratios = {}
+            for k, _ in tree_flatten(model.parameters()):
+                for li in range(num_layers):
+                    if f"layers.{li}." in k:
+                        ratios[k] = llrd_decay ** (num_layers - 1 - li)
+                        break
+                else:
+                    ratios[k] = 1.0  # head / embeddings get full LR
+            opt._llrd_ratios = ratios
+            opt._llrd_weight_decay = weight_decay
+        else:
+            opt = optim.AdamW(learning_rate=lr, weight_decay=weight_decay, betas=opt_betas, eps=opt_eps)
+        return opt
+
+    def make_ema_state() -> dict | None:
+        """Create EMA state dict if ema_decay > 0."""
+        if ema_decay_val <= 0:
+            return None
+        ema_weights = {k: mx.array(v) for k, v in tree_flatten(model.parameters())}
+        return {"decay": ema_decay_val, "weights": ema_weights}
+
     # ---- Stage 1: Warmup ----
     warmup_cfg = stages.get("warmup", {})
     warmup_data = [t for t in triplets if "qqp" in t.get("source", "") or "stackexchange" in t.get("source", "") or "reddit" in t.get("source", "")]
@@ -733,35 +795,33 @@ def main():
         warmup_data = triplets
 
     warmup_lr = float(warmup_cfg.get("learning_rate", 1e-4))
-    weight_decay = float(config.get("optimizer", {}).get("weight_decay", 0.01))
-    optimizer = optim.AdamW(learning_rate=warmup_lr, weight_decay=weight_decay)
+    optimizer = make_optimizer(warmup_lr)
+    ema_state = make_ema_state()
 
     train_start = time.time()
 
     if should_skip("warmup"):
         print("=== Stage: warmup — SKIPPED (--resume-stage) ===", flush=True)
     elif warmup_data:
-        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup")
+        run_training_stage(model, tokenizer, warmup_data, warmup_cfg, optimizer, "warmup", ema_state=ema_state)
         save_stage_checkpoint("warmup")
+    gc.collect()
+    mx.clear_cache()
 
     # ---- Stage 2: Full contrastive ----
     contrastive_cfg = stages.get("contrastive", {})
     contrastive_lr = float(contrastive_cfg.get("learning_rate", 5e-5))
-    optimizer = optim.AdamW(learning_rate=contrastive_lr, weight_decay=weight_decay)
+    optimizer = make_optimizer(contrastive_lr)
 
     if should_skip("contrastive"):
         print("=== Stage: contrastive — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets:
         if resume_stage == "contrastive":
             load_stage_checkpoint("warmup")
-        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive")
+        run_training_stage(model, tokenizer, triplets, contrastive_cfg, optimizer, "contrastive", ema_state=ema_state)
         save_stage_checkpoint("contrastive")
-
-    # Free MLX memory before hard negative mining (inference mode)
-    try:
-        mx.metal.clear_cache()
-    except Exception:
-        pass
+    gc.collect()
+    mx.clear_cache()
 
     # ---- Stage 3: Hard negative mining ----
     mining_cfg = stages.get("hard_neg_mining", {})
@@ -782,18 +842,20 @@ def main():
         save_stage_checkpoint("mining")
     else:
         triplets_with_negs = triplets
+    gc.collect()
+    mx.clear_cache()
 
     # ---- Stage 4: Hard negative fine-tuning ----
     finetuning_cfg = stages.get("fine_tuning", {})
     finetuning_lr = float(finetuning_cfg.get("learning_rate", 1e-5))
-    optimizer = optim.AdamW(learning_rate=finetuning_lr, weight_decay=weight_decay)
+    optimizer = make_optimizer(finetuning_lr)
 
     if should_skip("finetune"):
         print("=== Stage: fine_tuning — SKIPPED (--resume-stage) ===", flush=True)
     elif triplets_with_negs:
         if resume_stage == "finetune":
             load_stage_checkpoint("mining")
-        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning")
+        run_training_stage(model, tokenizer, triplets_with_negs, finetuning_cfg, optimizer, "fine_tuning", ema_state=ema_state)
         save_stage_checkpoint("finetune")
 
     # Load latest checkpoint if resuming directly to eval
@@ -919,6 +981,9 @@ def main():
     print(f"\nPer-task scores:")
     for task, score in sorted(scores.items()):
         print(f"  {task}: {score:.2f}")
+
+    gc.enable()
+    gc.collect()
 
 
 if __name__ == "__main__":
