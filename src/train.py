@@ -623,7 +623,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
                 if not sentences and batch:
                     sentences = list(batch.values())[0]
                 if sentences:
-                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=64)
+                    emb = self.model.encode_sentences(sentences, self.tokenizer, batch_size=256)
                     all_embs.append(emb)
             if all_embs:
                 return np.concatenate(all_embs, axis=0)
