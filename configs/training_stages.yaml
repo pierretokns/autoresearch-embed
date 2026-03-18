@@ -28,7 +28,7 @@ stages:
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # match exp-82 baseline
-    learning_rate: 5.0e-5
+    learning_rate: 1.0e-4  # exp-93: 2x contrastive LR (5e-5 → 1e-4); more aggressive with 655K data
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64
@@ -59,7 +59,7 @@ optimizer:
   betas: [0.9, 0.999]
   eps: 1.0e-8
   weight_decay: 0.01
-  llrd_decay: 0.95  # exp-92: layer-wise LR decay (lower layers get less LR; standard for BERT fine-tuning)
+  llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
   ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
 
 data:
