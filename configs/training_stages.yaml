@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "mean"  # exp-90: mean pooling (averages all tokens, more info than CLS)
+pooling: "cls"  # revert to baseline (mean pooling was ~flat in exp-90)
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 60  # match exp-82 baseline (best: 57.72)
+    duration_minutes: 120  # 2x baseline: proportional to 2x data (100K/dataset)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # match exp-82 baseline
@@ -63,7 +63,7 @@ optimizer:
   ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
 
 data:
-  max_rows_per_dataset: 30000  # revert to exp-82 baseline
+  max_rows_per_dataset: 100000  # 3x baseline: scale data for more unique training pairs
 
 memory:
   max_peak_gb: 55
