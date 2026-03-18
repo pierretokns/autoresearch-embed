@@ -147,12 +147,17 @@ def matryoshka_infonce_loss(
 
 def infonce_loss_with_hard_negs(
     query_emb: mx.array, positive_emb: mx.array, hard_neg_emb: mx.array,
-    temperature: float = 0.05, hard_neg_weight: float = 2.0,
+    temperature: float = 0.05, hard_neg_weight: float = 1.0,
 ) -> mx.array:
-    """InfoNCE with in-batch negatives plus explicit hard negatives."""
+    """InfoNCE with in-batch negatives plus explicit hard negatives.
+
+    hard_neg_weight scales the hard negative similarity logit. At 1.0, the hard
+    negative is treated equally to in-batch negatives. Values > 1 amplify the
+    hard neg repulsion (2.0 destroyed the model in exp-70 — too aggressive)."""
     B = query_emb.shape[0]
     sim_inbatch = mx.matmul(query_emb, positive_emb.T) / temperature
-    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature * hard_neg_weight
+    # Hard neg similarity at natural scale (weight=1.0 means no amplification)
+    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
     logits = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
     labels = mx.arange(B)
     log_softmax = logits - mx.logsumexp(logits, axis=1, keepdims=True)
@@ -170,100 +175,6 @@ def _cache_path(ds_id: str, config: str | None, fmt: str, max_rows: int) -> Path
     h = hashlib.sha256(key.encode()).hexdigest()[:12]
     safe_name = ds_id.replace("/", "_")
     return Path("data_cache") / f"{safe_name}_{h}.json"
-
-
-def deduplicate_triplets(triplets: list[dict], num_perm: int = 64, threshold: float = 0.5) -> tuple[list[dict], int]:
-    """MinHash cross-dataset deduplication of training pairs.
-
-    Hashes the concatenated query+positive text and removes near-duplicates
-    (Jaccard similarity > threshold) across different sources. Keeps the first
-    occurrence and removes later duplicates. Returns (deduped_list, num_removed).
-
-    Uses fast word-level shingling + numpy vectorized MinHash for speed (~30s on 200K pairs)."""
-    SHINGLE_K = 3  # word n-gram size
-
-    def _word_shingles(text: str) -> list:
-        words = text.lower().split()
-        if len(words) < SHINGLE_K:
-            return [text.lower()]
-        return [" ".join(words[i:i + SHINGLE_K]) for i in range(len(words) - SHINGLE_K + 1)]
-
-    print(f"  Deduplicating {len(triplets)} pairs (MinHash, threshold={threshold})...")
-
-    # Generate random hash parameters (a*x + b mod p) for MinHash
-    LARGE_PRIME = (1 << 31) - 1
-    rng = np.random.RandomState(42)
-    hash_a = rng.randint(1, LARGE_PRIME, size=num_perm, dtype=np.int64)
-    hash_b = rng.randint(0, LARGE_PRIME, size=num_perm, dtype=np.int64)
-
-    # Build signatures using numpy-vectorized MinHash
-    sigs = np.full((len(triplets), num_perm), np.iinfo(np.int64).max, dtype=np.int64)
-
-    for idx, t in enumerate(triplets):
-        combined = t["query"][:200] + " ||| " + t["positive"][:200]
-        shingles = _word_shingles(combined)
-        for s in shingles:
-            # Use hashlib for determinism (Python hash() is randomized per-process)
-            h = int(hashlib.md5(s.encode()).hexdigest()[:8], 16)
-            # Vectorized: (a * h + b) mod p for all permutations at once
-            vals = (hash_a * h + hash_b) % LARGE_PRIME
-            sigs[idx] = np.minimum(sigs[idx], vals)
-
-        if idx > 0 and idx % 50000 == 0:
-            print(f"    MinHash progress: {idx}/{len(triplets)}")
-
-    # LSH banding: split signature into bands, hash each band
-    # For threshold ~0.5 with 64 perms: bands=16, rows=4 gives P(candidate) ≈ 1-(1-0.5^4)^16 ≈ 0.64
-    bands = 16
-    rows_per_band = num_perm // bands
-    buckets: dict = {}
-
-    for idx in range(len(triplets)):
-        for b in range(bands):
-            band_sig = tuple(sigs[idx, b * rows_per_band:(b + 1) * rows_per_band].tolist())
-            band_key = (b, hash(band_sig))
-            if band_key not in buckets:
-                buckets[band_key] = []
-            buckets[band_key].append(idx)
-
-    # Find duplicates: for each bucket with >1 item, verify with full signature Jaccard
-    keep = [True] * len(triplets)
-
-    for indices in buckets.values():
-        if len(indices) < 2:
-            continue
-        for i in range(len(indices)):
-            if not keep[indices[i]]:
-                continue
-            for j in range(i + 1, len(indices)):
-                idx_a, idx_b = indices[i], indices[j]
-                if not keep[idx_b]:
-                    continue
-                # Approximate Jaccard from MinHash: fraction of matching positions
-                jaccard = float(np.sum(sigs[idx_a] == sigs[idx_b])) / num_perm
-                if jaccard >= threshold:
-                    keep[idx_b] = False
-
-    deduped = [t for t, k in zip(triplets, keep) if k]
-    removed = len(triplets) - len(deduped)
-    print(f"  Dedup removed {removed} near-duplicates ({removed / len(triplets) * 100:.1f}%)")
-
-    # Show per-source breakdown
-    source_counts_before: dict = {}
-    source_counts_after: dict = {}
-    for t in triplets:
-        s = t.get("source", "unknown")
-        source_counts_before[s] = source_counts_before.get(s, 0) + 1
-    for t in deduped:
-        s = t.get("source", "unknown")
-        source_counts_after[s] = source_counts_after.get(s, 0) + 1
-    for src in sorted(source_counts_before.keys()):
-        before = source_counts_before[src]
-        after = source_counts_after.get(src, 0)
-        if before != after:
-            print(f"    {src}: {before} → {after} (-{before - after})")
-
-    return deduped, removed
 
 
 def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 50000) -> list[dict]:
@@ -580,7 +491,7 @@ def run_training_stage(
 
             # Check for hard negatives
             has_hard_negs = any(t.get("negatives") for t in batch)
-            if has_hard_negs and hard_neg_weight > 1.0:
+            if has_hard_negs and hard_neg_weight > 0.0:
                 negs_text = []
                 for t in batch:
                     negs = t.get("negatives", [])
@@ -875,8 +786,7 @@ def main():
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Cache key includes dedup flag so adding dedup invalidates old cache
-    ds_key = hashlib.sha256((json.dumps(DATASETS, sort_keys=True) + "_dedup_v1").encode()).hexdigest()[:12]
+    ds_key = hashlib.sha256(json.dumps(DATASETS, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -884,7 +794,7 @@ def main():
         print(f"Loading cached clean triplets from {cache_path}...")
         triplets = json.loads(cache_path.read_text())
         removed = 0
-        print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated + deduped).")
+        print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
     else:
         print("Loading training data...")
         triplets = load_training_data(DATASETS, max_rows_per_dataset=30000)
@@ -895,11 +805,6 @@ def main():
         test_lsh = build_test_lsh(DECONTAM_TASKS)
         triplets, removed = filter_triplets(triplets, test_lsh)
         print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
-
-        # Cross-dataset MinHash deduplication
-        print("Running MinHash cross-dataset deduplication...")
-        triplets, dedup_removed = deduplicate_triplets(triplets, num_perm=128, threshold=0.6)
-        print(f"After dedup: {len(triplets)} clean unique pairs")
 
         cache_path.write_text(json.dumps(triplets))
         print(f"Cached clean triplets to {cache_path}")

@@ -51,7 +51,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 64  # exp-67 had batch=32 but no grad_accum (unimplemented) — standardize to 64
-    hard_neg_weight: 0.0
+    hard_neg_weight: 1.0  # exp-89: enable hard negs at natural scale (fixed gate + formula)
     false_neg_threshold: 0.0
 
 optimizer:
