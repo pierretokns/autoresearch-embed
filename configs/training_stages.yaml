@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "cls"  # CLS pooling (exp-67 baseline)
+pooling: "mean"  # exp-90: mean pooling (averages all tokens, more info than CLS)
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -51,7 +51,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 64  # exp-67 had batch=32 but no grad_accum (unimplemented) — standardize to 64
-    hard_neg_weight: 1.0  # exp-89: enable hard negs at natural scale (fixed gate + formula)
+    hard_neg_weight: 0.0
     false_neg_threshold: 0.0
 
 optimizer:
