@@ -324,6 +324,19 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                             if passage and len(passage) > 30:
                                 all_triplets.append({"query": question, "positive": passage[:400], "source": ds_id})
                                 break
+            elif fmt == "pubmedqa":
+                # PubMedQA: biomedical question → context passage pairs
+                for row in ds:
+                    question = row.get("question", "")
+                    context = row.get("context", {})
+                    if not question or not context:
+                        continue
+                    contexts = context.get("contexts", []) if isinstance(context, dict) else []
+                    if contexts:
+                        # Use first context passage as the positive
+                        passage = str(contexts[0])[:400]
+                        if len(passage) > 30:
+                            all_triplets.append({"query": question, "positive": passage, "source": ds_id})
             elif fmt == "yahoo_answers_label_pairs":
                 # Yahoo Answers Topics: group by topic, pair same-topic questions
                 import random as _random
@@ -741,6 +754,8 @@ DATASETS = [
     {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
+    # PubMedQA: biomedical question → context passage pairs for NFCorpus/SciFact retrieval
+    {"id": "qiaojin/PubMedQA", "config": "pqa_artificial", "format": "pubmedqa"},
 ]
 
 

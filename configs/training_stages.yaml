@@ -28,10 +28,10 @@ stages:
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # match exp-82 baseline
-    learning_rate: 7.5e-5  # exp-94: linear-scaled LR for batch=96 (batch 1.5x → LR 1.5x from 5e-5)
+    learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 96  # exp-94: 1.5x batch for 50% more in-batch negatives (95 vs 63); batch=128 OOM'd at 51GB
+    batch_size: 64  # exp-91 baseline (batch=128 OOM, batch=96 regressed)
     negatives: "in_batch_plus_explicit"
     source_stratification: true
     false_neg_threshold: 0.0
