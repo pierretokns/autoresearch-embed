@@ -395,7 +395,8 @@ def run_training_stage(
     """Run one training stage for the configured duration using MLX value_and_grad."""
     duration_s = float(stage_cfg.get("duration_minutes", 10)) * 60
     batch_size = int(stage_cfg.get("batch_size", 128))
-    temperature = float(stage_cfg.get("temperature", 0.05))
+    temperature_start = float(stage_cfg.get("temperature", 0.05))
+    temperature_end = float(stage_cfg.get("temperature_end", 0.0))  # 0 = no annealing
     max_seq_len = 256
     hard_neg_weight = float(stage_cfg.get("hard_neg_weight", 1.0))
     symmetric = bool(stage_cfg.get("symmetric", False))
@@ -438,7 +439,12 @@ def run_training_stage(
     step = 0
     total_loss = 0.0
 
+    # Mutable temperature container for annealing (closure captures the list)
+    current_temp = [temperature_start]
+
     print(f"\n=== Stage: {stage_name} ({stage_cfg.get('duration_minutes', 10)} min) ===")
+    if temperature_end > 0 and temperature_end != temperature_start:
+        print(f"  Temperature annealing: {temperature_start} → {temperature_end}")
 
     data = list(triplets)
     random.shuffle(data)
@@ -446,6 +452,7 @@ def run_training_stage(
 
     def loss_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids=None, n_mask=None):
         """Compute loss given tokenized inputs."""
+        temperature = current_temp[0]
         q_emb = model(q_ids, q_mask)
         p_emb = model(p_ids, p_mask)
         if n_ids is not None:
@@ -523,6 +530,11 @@ def run_training_stage(
             # Update LR according to schedule (time-based for accuracy)
             if lr_schedule != "constant":
                 optimizer.learning_rate = get_lr_by_time(time.time() - stage_start)
+
+            # Temperature annealing: linear interpolation from start to end
+            if temperature_end > 0 and temperature_end != temperature_start:
+                progress = min((time.time() - stage_start) / max(1.0, duration_s), 1.0)
+                current_temp[0] = temperature_start + progress * (temperature_end - temperature_start)
 
             optimizer.update(model, grads)
             # EMA update (per optimizer step, not per micro-batch)
