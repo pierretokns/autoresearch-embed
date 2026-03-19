@@ -337,6 +337,13 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                         passage = str(contexts[0])[:400]
                         if len(passage) > 30:
                             all_triplets.append({"query": question, "positive": passage, "source": ds_id})
+            elif fmt == "s2orc_title_abstract":
+                # S2ORC: scientific paper title → abstract pairs for retrieval + clustering
+                for row in ds:
+                    title = row.get("title", "")
+                    abstract = row.get("abstract", "")
+                    if title and abstract and len(abstract) > 50:
+                        all_triplets.append({"query": title, "positive": str(abstract)[:400], "source": ds_id})
             elif fmt == "yahoo_answers_label_pairs":
                 # Yahoo Answers Topics: group by topic, pair same-topic questions
                 import random as _random
@@ -756,6 +763,8 @@ DATASETS = [
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
     # PubMedQA: biomedical question → context passage pairs for NFCorpus/SciFact retrieval
     {"id": "qiaojin/PubMedQA", "config": "pqa_artificial", "format": "pubmedqa"},
+    # S2ORC: scientific paper title → abstract pairs for retrieval + clustering diversity
+    {"id": "sentence-transformers/s2orc", "config": "title-abstract-pair", "format": "s2orc_title_abstract", "streaming": True},
 ]
 
 
