@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 140  # exp-96 sweet spot (180min regressed in exp-97, 57.57 vs 58.23)
+    duration_minutes: 160  # proportional to ~936K pairs (FEVER+S2ORC); 140/756K baseline ratio
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # match exp-82 baseline

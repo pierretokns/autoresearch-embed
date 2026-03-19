@@ -344,6 +344,22 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
                     abstract = row.get("abstract", "")
                     if title and abstract and len(abstract) > 50:
                         all_triplets.append({"query": title, "positive": str(abstract)[:400], "source": ds_id})
+            elif fmt == "fever_claims":
+                # FEVER: claim → evidence sentence pairs (SUPPORTS only) for fact retrieval
+                for row in ds:
+                    label = row.get("label", "")
+                    if label != "SUPPORTS":
+                        continue
+                    claim = row.get("claim", "")
+                    evidence = row.get("evidence", [])
+                    if claim and evidence:
+                        # evidence is list of [page, sent_id, text] triples
+                        for ev in evidence:
+                            if isinstance(ev, (list, tuple)) and len(ev) >= 3:
+                                text = str(ev[2]).strip()
+                                if len(text) > 30:
+                                    all_triplets.append({"query": claim, "positive": text[:400], "source": ds_id})
+                                    break  # one evidence per claim
             elif fmt == "yahoo_answers_label_pairs":
                 # Yahoo Answers Topics: group by topic, pair same-topic questions
                 import random as _random
@@ -765,6 +781,8 @@ DATASETS = [
     {"id": "qiaojin/PubMedQA", "config": "pqa_artificial", "format": "pubmedqa"},
     # S2ORC: scientific paper title → abstract pairs for retrieval + clustering diversity
     {"id": "sentence-transformers/s2orc", "config": "title-abstract-pair", "format": "s2orc_title_abstract", "streaming": True},
+    # FEVER: claim → evidence pairs for fact-based retrieval (SciFact-like)
+    {"id": "copenlu/fever_gold_evidence", "config": None, "format": "fever_claims"},
 ]
 
 
