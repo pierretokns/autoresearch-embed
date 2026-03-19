@@ -773,16 +773,15 @@ DATASETS = [
     {"id": "fancyzhx/dbpedia_14", "config": None, "format": "label_pairs"},
     # Yahoo Answers Topics: 10 classes for Q&A topic diversity
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
-    # SNLI: entailment pairs for semantic similarity training (strongly correlates with STS)
-    {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # AllNLI triplets (SNLI+MNLI): replaces standalone SNLI; triplet format includes hard negatives
+    {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
     # PubMedQA: biomedical question → context passage pairs for NFCorpus/SciFact retrieval
     {"id": "qiaojin/PubMedQA", "config": "pqa_artificial", "format": "pubmedqa"},
     # S2ORC: scientific paper title → abstract pairs for retrieval + clustering diversity
     {"id": "sentence-transformers/s2orc", "config": "title-abstract-pair", "format": "s2orc_title_abstract", "streaming": True},
-    # FEVER: claim → evidence pairs for fact-based retrieval (SciFact-like)
-    {"id": "copenlu/fever_gold_evidence", "config": None, "format": "fever_claims"},
+    # FEVER removed in exp-100: improved SciFact (+2.45) but hurt pair classification (-2.78 SprintDup)
 ]
 
 
