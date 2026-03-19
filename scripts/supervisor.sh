@@ -53,7 +53,7 @@ while [ $restart_count -lt $MAX_RESTARTS ]; do
         --model claude-opus-4-6 \
         --dangerously-skip-permissions \
         --max-turns 200 \
-        "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. CRITICAL: experiment.py is synchronous — just call it and wait for it to return. NEVER create while/sleep/pgrep polling loops or background monitoring scripts. They deadlock. Never stop." \
+        "Resume the experiment loop. Read results.jsonl and git log --oneline -20. If uncommitted changes exist, git checkout . to clean up. Decide what to try, edit code, run uv run scripts/experiment.py. CRITICAL: experiment.py is synchronous — just call it and wait for it to return. NEVER create while/sleep/pgrep polling loops or background monitoring scripts. They deadlock. After each experiment, READ THE STAGE SUMMARY in the output — it shows per-source saturation and wasted compute. If sources are marked SATURATED (>60% batches at near-zero loss), consider removing them from training data or reducing contrastive duration. You may also add new telemetry/logging to train.py if you need better observability to diagnose issues. Never stop." \
         2>&1 | tee "$log_file" || true
 
     restart_count=$((restart_count + 1))

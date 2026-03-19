@@ -631,7 +631,38 @@ def run_training_stage(
 
     stage_time = time.time() - stage_start
     avg_loss = total_loss / max(step, 1)
-    print(f"  [{stage_name}] Done: {step} steps, avg_loss={avg_loss:.4f}, {stage_time:.0f}s", flush=True)
+    final_sat_pct = saturated_count / max(total_count, 1) * 100
+
+    # Stage summary with actionable insights for the autonomous agent
+    print(f"\n  [{stage_name}] === STAGE SUMMARY ===", flush=True)
+    print(f"  [{stage_name}] Steps: {step} | Avg loss: {avg_loss:.4f} | Time: {stage_time:.0f}s ({stage_time/60:.1f}min)", flush=True)
+    print(f"  [{stage_name}] Step time: {stage_time/max(step,1):.2f}s/step | Saturation: {final_sat_pct:.0f}% of batches had loss < {SATURATION_THRESHOLD}", flush=True)
+
+    # Per-source final health
+    saturated_sources = []
+    healthy_sources = []
+    for src in sorted(source_losses.keys()):
+        losses = source_losses[src]
+        src_avg = sum(losses) / len(losses) if losses else 0
+        src_sat = sum(1 for l in losses if l < SATURATION_THRESHOLD) / len(losses) * 100 if losses else 0
+        if src_sat > 60:
+            saturated_sources.append((src, src_avg, src_sat))
+        else:
+            healthy_sources.append((src, src_avg, src_sat))
+
+    if saturated_sources:
+        print(f"  [{stage_name}] SATURATED sources (>60% batches at loss<{SATURATION_THRESHOLD}, wasting compute):", flush=True)
+        for src, avg, sat in saturated_sources:
+            print(f"    {src}: avg_loss={avg:.3f}, sat={sat:.0f}% — CONSIDER REMOVING from training data", flush=True)
+    if healthy_sources:
+        print(f"  [{stage_name}] Healthy sources (still learning):", flush=True)
+        for src, avg, sat in healthy_sources:
+            print(f"    {src}: avg_loss={avg:.3f}, sat={sat:.0f}%", flush=True)
+
+    if final_sat_pct > 40:
+        print(f"  [{stage_name}] WARNING: {final_sat_pct:.0f}% saturation — consider shorter contrastive or removing saturated sources", flush=True)
+
+    print(f"  [{stage_name}] === END SUMMARY ===\n", flush=True)
     return step
 
 
