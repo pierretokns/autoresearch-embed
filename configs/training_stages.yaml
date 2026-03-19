@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 120  # 2x baseline: proportional to 2x data (100K/dataset)
+    duration_minutes: 140  # proportional to 756K pairs (120min was for 655K)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # match exp-82 baseline
