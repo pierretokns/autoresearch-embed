@@ -43,15 +43,15 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 5  # match exp-67 baseline
+    duration_minutes: 15  # exp-102: extend from 5min to leverage mined hard negatives
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
-    batch_size: 64  # exp-67 had batch=32 but no grad_accum (unimplemented) — standardize to 64
-    hard_neg_weight: 0.0
+    batch_size: 64
+    hard_neg_weight: 1.0  # exp-102: re-enable (was 0.0 = disabled); 1.0 = equal to in-batch negs (2.0 crashed in exp-70)
     false_neg_threshold: 0.0
 
 optimizer:
