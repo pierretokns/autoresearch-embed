@@ -475,6 +475,13 @@ def run_training_stage(
     step = 0
     total_loss = 0.0
 
+    # Telemetry: per-source loss tracking + saturation detection
+    from collections import defaultdict
+    source_losses = defaultdict(list)  # source → list of recent losses
+    saturated_count = 0  # batches with loss < 0.15 in last window
+    total_count = 0
+    SATURATION_THRESHOLD = 0.15
+
     # Mutable temperature container for annealing (closure captures the list)
     current_temp = [temperature_start]
 
@@ -588,16 +595,36 @@ def run_training_stage(
             micro_loss = float(loss.item())
             total_loss += micro_loss
 
+            # Telemetry: track per-source loss and saturation
+            batch_source = batch[0].get("source", "unknown") if batch else "unknown"
+            source_losses[batch_source].append(micro_loss)
+            total_count += 1
+            if micro_loss < SATURATION_THRESHOLD:
+                saturated_count += 1
+
             if step % 50 == 0:
                 elapsed = time.time() - stage_start
                 avg_loss = total_loss / step
-                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | last={micro_loss:.4f} | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
+                sat_pct = saturated_count / max(total_count, 1) * 100
+                step_time = elapsed / step
+                print(f"  [{stage_name}] Step {step} | loss={avg_loss:.4f} | last={micro_loss:.4f} | sat={sat_pct:.0f}% | {elapsed:.0f}s/{duration_s:.0f}s", flush=True)
                 try:
                     import wandb
                     if wandb.run is not None:
-                        wandb.log({"loss": micro_loss, "avg_loss": avg_loss, "step": step, "stage": stage_name})
+                        wandb.log({"loss": micro_loss, "avg_loss": avg_loss, "step": step,
+                                   "stage": stage_name, "saturated_pct": sat_pct})
                 except Exception:
                     pass
+
+            # Source health report every 500 steps
+            if step % 500 == 0:
+                print(f"  [{stage_name}] Source health @ step {step}:", flush=True)
+                for src in sorted(source_losses.keys()):
+                    losses = source_losses[src][-200:]  # last 200 per source
+                    src_avg = sum(losses) / len(losses)
+                    src_sat = sum(1 for l in losses if l < SATURATION_THRESHOLD) / len(losses) * 100
+                    status = "SATURATED" if src_sat > 60 else "healthy"
+                    print(f"    {src:45s} avg={src_avg:.3f} sat={src_sat:.0f}% [{status}]", flush=True)
 
         random.shuffle(data)
         mx.clear_cache()  # Consolidate Metal memory after shuffle
