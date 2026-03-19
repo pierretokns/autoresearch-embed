@@ -34,6 +34,7 @@ stages:
     batch_size: 64  # exp-91 baseline (batch=128 OOM, batch=96 regressed)
     negatives: "in_batch_plus_explicit"
     source_stratification: true
+    symmetric: true  # exp-103: bidirectional InfoNCE (query→pos + pos→query); doubles gradient signal; standard in SimCSE, E5
     false_neg_threshold: 0.0
 
   hard_neg_mining:
@@ -43,7 +44,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 15  # exp-102: extend from 5min to leverage mined hard negatives
+    duration_minutes: 5  # revert to exp-98 baseline (exp-102: 15min caused catastrophic forgetting)
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
@@ -51,7 +52,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 64
-    hard_neg_weight: 1.0  # exp-102: re-enable (was 0.0 = disabled); 1.0 = equal to in-batch negs (2.0 crashed in exp-70)
+    hard_neg_weight: 0.0  # revert: exp-102 showed weight=1.0 causes catastrophic forgetting (-3.19 primary)
     false_neg_threshold: 0.0
 
 optimizer:
