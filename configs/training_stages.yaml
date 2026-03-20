@@ -27,8 +27,8 @@ stages:
     duration_minutes: 140  # exp-98/96 sweet spot; 160min regressed in exp-99 (58.55 vs 58.69)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.07  # exp-104: anneal from 0.07 → 0.03 (softer early → sharper late)
-    temperature_end: 0.03  # exp-104: temperature annealing endpoint
+    temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
+    temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
     learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
@@ -65,7 +65,7 @@ optimizer:
   ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
 
 data:
-  max_rows_per_dataset: 100000  # 3x baseline: scale data for more unique training pairs
+  max_rows_per_dataset: 200000  # exp-105: 2x data scaling (100K→200K); more unique pairs = more learning signal; contrastive kept at 140min (21% sat = still learning)
 
 memory:
   max_peak_gb: 55
