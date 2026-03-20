@@ -27,7 +27,8 @@ stages:
     duration_minutes: 140  # exp-98/96 sweet spot; 160min regressed in exp-99 (58.55 vs 58.69)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05  # match exp-82 baseline
+    temperature: 0.07  # exp-104: anneal from 0.07 → 0.03 (softer early → sharper late)
+    temperature_end: 0.03  # exp-104: temperature annealing endpoint
     learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
