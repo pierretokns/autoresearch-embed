@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 180  # exp-107: longer training on 100K data (exp-104 had 21% sat at 140min = room to learn; exp-105/106 showed 200K data hurts STS/PairClass via dilution; test if more compute on same data improves without regression)
+    duration_minutes: 200  # exp-108: skip fine-tuning (99% sat = wasted compute) and extend contrastive instead; exp-107 had 14% sat at 180min = still learning; corrected baseline 62.29 (21-task)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
@@ -45,7 +45,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 5  # revert to exp-98 baseline (exp-102: 15min caused catastrophic forgetting)
+    duration_minutes: 0  # exp-108: skip fine-tuning entirely (99% sat in exp-107 = wasted compute; hypothesis: removing it prevents potential overfit from saturated stage)
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05

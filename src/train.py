@@ -775,7 +775,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
             if tn is None:
                 continue
             if hasattr(task_result, 'scores'):
-                for split_name in ["test", "validation", "dev"]:
+                for split_name in ["test", "validation", "dev", "train"]:
                     if split_name in task_result.scores:
                         split_scores = task_result.scores[split_name]
                         if isinstance(split_scores, list) and split_scores:
@@ -794,7 +794,7 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
             if result_files:
                 with open(sorted(result_files)[-1]) as f:
                     task_result = json.load(f)
-                for split_name in ["test", "validation", "dev"]:
+                for split_name in ["test", "validation", "dev", "train"]:
                     if split_name in task_result:
                         split_data = task_result[split_name]
                         if isinstance(split_data, dict):
