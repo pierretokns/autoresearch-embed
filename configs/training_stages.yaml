@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "cls"  # revert to baseline (mean pooling was ~flat in exp-90)
+pooling: "mean"  # exp-109: try mean pooling (exp-90 was flat but only 8-task eval; GTE/E5/all-MiniLM all use mean; CLS only uses one token)
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 200  # exp-108: skip fine-tuning (99% sat = wasted compute) and extend contrastive instead; exp-107 had 14% sat at 180min = still learning; corrected baseline 62.29 (21-task)
+    duration_minutes: 180  # exp-107 baseline (14% sat = still learning, but exp-108 showed 200min without fine-tuning regressed)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
@@ -45,7 +45,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 0  # exp-108: skip fine-tuning entirely (99% sat in exp-107 = wasted compute; hypothesis: removing it prevents potential overfit from saturated stage)
+    duration_minutes: 5  # exp-108 proved fine-tuning is necessary (removing it regressed SprintDup -15.26, TwitterURL -9.07)
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05
