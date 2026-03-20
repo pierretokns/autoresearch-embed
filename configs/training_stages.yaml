@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 140  # exp-98/96 sweet spot; 160min regressed in exp-99 (58.55 vs 58.69)
+    duration_minutes: 200  # exp-106: scale with 200K data (exp-105: 140min at 200K regressed -0.58 primary, only 18% sat; hypothesis: undertrained; SciFact +3.50 but STS/PairClass regressed)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
