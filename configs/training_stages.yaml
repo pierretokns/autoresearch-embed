@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 200  # exp-106: scale with 200K data (exp-105: 140min at 200K regressed -0.58 primary, only 18% sat; hypothesis: undertrained; SciFact +3.50 but STS/PairClass regressed)
+    duration_minutes: 180  # exp-107: longer training on 100K data (exp-104 had 21% sat at 140min = room to learn; exp-105/106 showed 200K data hurts STS/PairClass via dilution; test if more compute on same data improves without regression)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
@@ -65,7 +65,7 @@ optimizer:
   ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
 
 data:
-  max_rows_per_dataset: 200000  # exp-105: 2x data scaling (100K→200K); more unique pairs = more learning signal; contrastive kept at 140min (21% sat = still learning)
+  max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)
 
 memory:
   max_peak_gb: 55
