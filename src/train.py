@@ -809,14 +809,30 @@ def run_mteb_eval(model, tokenizer, tasks: list[str], output_dir: str = "mteb_re
 
 # ---- Main ----
 
+# Eval tasks: 21 tasks across all 7 MTEB categories
+# Uses nano retrieval (small/fast), v2 clustering, plus standard STS/PairClass/Classification/Reranking
+# Covers all categories for leaderboard-comparable scores
+# NOTE: When changing this list, also update DECONTAM_TASKS in src/data/decontaminate.py
 FULL_TASKS = [
+    # STS (2)
     "STSBenchmark", "SICK-R",
-    "TwitterURLCorpus", "SprintDuplicateQuestions",
-    "TwentyNewsgroupsClustering", "RedditClustering",
-    "SciFact", "NFCorpus",
+    # PairClassification (2)
+    "SprintDuplicateQuestions", "TwitterURLCorpus",
+    # Classification (2)
+    "Banking77Classification", "ToxicConversationsClassification",
+    # Clustering (1 — v2, no RedditClustering which takes 18 min)
+    "TwentyNewsgroupsClustering.v2",
+    # Reranking (1)
+    "AskUbuntuDupQuestions",
+    # Retrieval (13 — nano versions for speed)
+    "NanoArguAnaRetrieval", "NanoClimateFeverRetrieval", "NanoDBPediaRetrieval",
+    "NanoFEVERRetrieval", "NanoFiQA2018Retrieval", "NanoHotpotQARetrieval",
+    "NanoMSMARCORetrieval", "NanoNFCorpusRetrieval", "NanoNQRetrieval",
+    "NanoQuoraRetrieval", "NanoSCIDOCSRetrieval", "NanoSciFactRetrieval",
+    "NanoTouche2020Retrieval",
 ]
 
-QUICK_TASKS = ["STSBenchmark", "SICK-R", "TwitterURLCorpus"]
+QUICK_TASKS = ["STSBenchmark", "SICK-R", "NanoSciFactRetrieval"]
 
 DATASETS = [
     {"id": "glue", "config": "qqp", "format": "glue_qqp"},
@@ -1107,20 +1123,30 @@ def main():
         import traceback; traceback.print_exc()
         scores = {}
 
-    # Compute category averages
-    sts_scores = [scores.get("STSBenchmark", 0), scores.get("SICK-R", 0)]
-    sts_avg = np.mean([s for s in sts_scores if s > 0]) if any(s > 0 for s in sts_scores) else 0.0
+    # Compute category averages (21-task eval across all 7 MTEB categories)
+    # NOTE: Scores are NOT comparable to pre-exp-107 results (different task set)
+    def _cat_avg(task_names):
+        vals = [scores.get(t, 0) for t in task_names]
+        pos = [v for v in vals if v > 0]
+        return np.mean(pos) if pos else 0.0
 
-    pair_scores = [scores.get("TwitterURLCorpus", 0), scores.get("SprintDuplicateQuestions", 0)]
-    pair_avg = np.mean([s for s in pair_scores if s > 0]) if any(s > 0 for s in pair_scores) else 0.0
+    sts_avg = _cat_avg(["STSBenchmark", "SICK-R"])
+    pair_avg = _cat_avg(["SprintDuplicateQuestions", "TwitterURLCorpus"])
+    cluster_avg = _cat_avg(["TwentyNewsgroupsClustering.v2"])
+    classification_avg = _cat_avg(["Banking77Classification", "ToxicConversationsClassification"])
+    reranking_avg = _cat_avg(["AskUbuntuDupQuestions"])
+    retrieval_avg = _cat_avg([
+        "NanoArguAnaRetrieval", "NanoClimateFeverRetrieval", "NanoDBPediaRetrieval",
+        "NanoFEVERRetrieval", "NanoFiQA2018Retrieval", "NanoHotpotQARetrieval",
+        "NanoMSMARCORetrieval", "NanoNFCorpusRetrieval", "NanoNQRetrieval",
+        "NanoQuoraRetrieval", "NanoSCIDOCSRetrieval", "NanoSciFactRetrieval",
+        "NanoTouche2020Retrieval",
+    ])
 
-    cluster_scores = [scores.get("TwentyNewsgroupsClustering", 0), scores.get("RedditClustering", 0)]
-    cluster_avg = np.mean([s for s in cluster_scores if s > 0]) if any(s > 0 for s in cluster_scores) else 0.0
-
-    retrieval_scores = [scores.get("SciFact", 0), scores.get("NFCorpus", 0)]
-    retrieval_avg = np.mean([s for s in retrieval_scores if s > 0]) if any(s > 0 for s in retrieval_scores) else 0.0
-
-    primary = 0.3 * sts_avg + 0.2 * pair_avg + 0.2 * cluster_avg + 0.3 * retrieval_avg
+    # Simple average across all categories (matches MTEB leaderboard methodology)
+    cat_scores = [v for v in [sts_avg, pair_avg, cluster_avg, classification_avg,
+                              reranking_avg, retrieval_avg] if v > 0]
+    primary = np.mean(cat_scores) if cat_scores else 0.0
 
     peak_mem = mx.get_peak_memory() / 1024**3
     total_time = time.time() - total_start
@@ -1128,9 +1154,12 @@ def main():
     # === DO NOT REMOVE: result.json output required by experiment.py ===
     result_data = {
         "primary_score": round(primary, 4),
+        "eval_version": "21-task-nano-v1",  # Track which eval set produced this score
         "sts_avg": round(float(sts_avg), 4),
         "pair_class_avg": round(float(pair_avg), 4),
         "cluster_avg": round(float(cluster_avg), 4),
+        "classification_avg": round(float(classification_avg), 4),
+        "reranking_avg": round(float(reranking_avg), 4),
         "retrieval_avg": round(float(retrieval_avg), 4),
         "training_minutes": round(train_time / 60, 1),
         "peak_memory_gb": round(peak_mem, 1),
@@ -1170,11 +1199,13 @@ def main():
     # === END result.json output ===
 
     print("\n---")
-    print(f"primary_score:     {primary:.4f}")
+    print(f"primary_score:     {primary:.4f}  (21-task-nano-v1 — NOT comparable to pre-exp-107 scores)")
     print(f"sts_avg:           {float(sts_avg):.4f}")
     print(f"pair_class_avg:    {float(pair_avg):.4f}")
     print(f"cluster_avg:       {float(cluster_avg):.4f}")
-    print(f"retrieval_avg:     {float(retrieval_avg):.4f}")
+    print(f"classification_avg:{float(classification_avg):.4f}")
+    print(f"reranking_avg:     {float(reranking_avg):.4f}")
+    print(f"retrieval_avg:     {float(retrieval_avg):.4f}  (13 nano retrieval tasks)")
     print(f"training_minutes:  {train_time / 60:.1f}")
     print(f"peak_memory_gb:    {peak_mem:.1f}")
     print(f"num_params_M:      {num_params / 1e6:.1f}")

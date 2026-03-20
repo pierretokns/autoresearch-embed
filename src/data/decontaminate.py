@@ -102,14 +102,23 @@ def filter_triplets(
     return clean, removed
 
 
-# Target tasks for decontamination (must match contamination.py TARGET_TASKS)
+# Target tasks for decontamination — must cover ALL eval tasks
+# Updated for 21-task-nano-v1 eval set (exp-107+)
 DECONTAM_TASKS = [
-    "STSBenchmark",
-    "SICK-R",
-    "TwitterURLCorpus",
-    "SprintDuplicateQuestions",
-    "TwentyNewsgroupsClustering",
-    "RedditClustering",
-    "SciFact",
-    "NFCorpus",
+    # STS
+    "STSBenchmark", "SICK-R",
+    # PairClassification
+    "SprintDuplicateQuestions", "TwitterURLCorpus",
+    # Classification
+    "Banking77Classification", "ToxicConversationsClassification",
+    # Clustering
+    "TwentyNewsgroupsClustering.v2",
+    # Reranking
+    "AskUbuntuDupQuestions",
+    # Retrieval (nano versions — decontam against their test sets)
+    "NanoArguAnaRetrieval", "NanoClimateFeverRetrieval", "NanoDBPediaRetrieval",
+    "NanoFEVERRetrieval", "NanoFiQA2018Retrieval", "NanoHotpotQARetrieval",
+    "NanoMSMARCORetrieval", "NanoNFCorpusRetrieval", "NanoNQRetrieval",
+    "NanoQuoraRetrieval", "NanoSCIDOCSRetrieval", "NanoSciFactRetrieval",
+    "NanoTouche2020Retrieval",
 ]
