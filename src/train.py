@@ -855,7 +855,9 @@ DATASETS = [
     {"id": "qiaojin/PubMedQA", "config": "pqa_artificial", "format": "pubmedqa"},
     # S2ORC: scientific paper title → abstract pairs for retrieval + clustering diversity
     {"id": "sentence-transformers/s2orc", "config": "title-abstract-pair", "format": "s2orc_title_abstract", "streaming": True},
-    # FEVER removed in exp-100: improved SciFact (+2.45) but hurt pair classification (-2.78 SprintDup)
+    # FEVER: exp-100 removed (SciFact +2.45, SprintDup -2.78) but with 21-task eval retrieval has 13 tasks vs 2 pair_class
+    # exp-110: re-add FEVER — retrieval benefit should outweigh pair_class cost at new task weights
+    {"id": "copenlu/fever_gold_evidence", "config": None, "format": "fever_claims"},
 ]
 
 

@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "mean"  # exp-109: try mean pooling (exp-90 was flat but only 8-task eval; GTE/E5/all-MiniLM all use mean; CLS only uses one token)
+pooling: "cls"  # exp-109: mean pooling was flat/-0.42 on 21-task eval; CLS is our baseline
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 180  # exp-107 baseline (14% sat = still learning, but exp-108 showed 200min without fine-tuning regressed)
+    duration_minutes: 190  # exp-110: proportional to ~915K pairs (was 180min for 855K); FEVER adds ~60K pairs
     data: "all_curated"
     loss: "infonce"
     temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
