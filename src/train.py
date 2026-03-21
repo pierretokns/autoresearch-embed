@@ -847,8 +847,8 @@ DATASETS = [
     {"id": "fancyzhx/dbpedia_14", "config": None, "format": "label_pairs"},
     # Yahoo Answers Topics: 10 classes for Q&A topic diversity
     {"id": "yahoo_answers_topics", "config": None, "format": "yahoo_answers_label_pairs"},
-    # SNLI: entailment pairs for STS/semantic similarity
-    {"id": "stanfordnlp/snli", "config": None, "format": "nli"},
+    # AllNLI triplets (SNLI+MNLI): hard negatives (anchor/positive/negative) for better contrastive signal
+    {"id": "sentence-transformers/all-nli", "config": "triplet", "format": "triplet"},
     # HotpotQA: question → supporting passage pairs for factual/scientific retrieval
     {"id": "hotpot_qa", "config": "distractor", "format": "hotpotqa_retrieval"},
     # PubMedQA: biomedical question → context passage pairs for NFCorpus/SciFact retrieval
