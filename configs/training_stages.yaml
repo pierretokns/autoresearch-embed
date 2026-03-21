@@ -27,7 +27,7 @@ stages:
     duration_minutes: 180  # exp-107 baseline (best on non-retrieval categories)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.03  # exp-111: lower temp for sharper retrieval discrimination (exp-107 baseline was 0.05)
+    temperature: 0.02  # exp-112: even lower temp; exp-111 showed 0.03 improved retrieval +3.53 vs 0.05; continuing the trend
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
     learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
     lr_schedule: "cosine_decay"
