@@ -24,10 +24,10 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 190  # exp-110: proportional to ~915K pairs (was 180min for 855K); FEVER adds ~60K pairs
+    duration_minutes: 180  # exp-107 baseline (best on non-retrieval categories)
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05  # revert to exp-103 baseline (exp-104 annealing was +0.04, within noise)
+    temperature: 0.03  # exp-111: lower temp for sharper retrieval discrimination (exp-107 baseline was 0.05)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
     learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
     lr_schedule: "cosine_decay"
