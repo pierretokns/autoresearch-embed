@@ -48,7 +48,7 @@ stages:
     duration_minutes: 5  # exp-108 proved fine-tuning is necessary (removing it regressed SprintDup -15.26, TwitterURL -9.07)
     data: "all_curated_with_hard_negs"
     loss: "infonce"
-    temperature: 0.05
+    temperature: 0.03  # exp-114: align with contrastive temp (was 0.05); consistency between stages should help
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
