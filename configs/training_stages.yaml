@@ -11,7 +11,7 @@ simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
 
 stages:
   warmup:
-    duration_minutes: 15
+    duration_minutes: 30  # exp-115: double warmup (was 15); longer warmup → better initial representations before harder contrastive stage
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
@@ -48,7 +48,7 @@ stages:
     duration_minutes: 5  # exp-108 proved fine-tuning is necessary (removing it regressed SprintDup -15.26, TwitterURL -9.07)
     data: "all_curated_with_hard_negs"
     loss: "infonce"
-    temperature: 0.03  # exp-114: align with contrastive temp (was 0.05); consistency between stages should help
+    temperature: 0.05  # revert: exp-114 showed FT temp=0.03 improved STS +2.29 but hurt retrieval -3.41; 0.05 is better overall
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
