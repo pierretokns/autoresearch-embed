@@ -11,7 +11,7 @@ simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
 
 stages:
   warmup:
-    duration_minutes: 30  # exp-115: double warmup (was 15); longer warmup → better initial representations before harder contrastive stage
+    duration_minutes: 15  # revert: exp-115 showed 30min warmup over-specialized on paraphrase data (-4.88 primary, reranking -25.10)
     data: "qqp_se_paraphrase"
     loss: "infonce"
     temperature: 0.1
@@ -29,7 +29,7 @@ stages:
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 5.0e-5  # exp-91 baseline (LR increases regressed in exp-93, exp-94)
+    learning_rate: 3.0e-5  # exp-116: lower LR for sharper temp=0.03 landscape; 5e-5 was exp-91 baseline, increases regressed (exp-93/94), decrease untested
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # exp-91 baseline (batch=128 OOM, batch=96 regressed)
