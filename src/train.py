@@ -167,6 +167,9 @@ def infonce_loss_with_hard_negs(
 # ---- Data Loading ----
 # Enable fast multi-connection HF downloads (Rust-based, ~5-10x faster)
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+# Use cached HF artifacts when network is unavailable (proxy errors, offline)
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 def _cache_path(ds_id: str, config: str | None, fmt: str, max_rows: int) -> Path:
     """Return path to cached triplets JSON for a dataset spec."""
