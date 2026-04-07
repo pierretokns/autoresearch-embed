@@ -1090,9 +1090,9 @@ def main():
     print(f"\nTotal training time: {train_time/60:.1f} min")
 
     # Swap EMA weights into model before save/eval (EMA averages reduce noise → better generalization)
-    if ema_state is not None:
+    # Only swap if training actually ran (not on --resume-stage eval where EMA is uninitialized base weights)
+    if ema_state is not None and not args.resume_stage:
         ema_w = ema_state["weights"]
-        original_weights = dict(tree_flatten(model.parameters()))
         model.load_weights(list(ema_w.items()))
         mx.eval(model.parameters())
         print(f"[EMA] Swapped EMA weights into model (decay={ema_state['decay']})")
