@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 180  # exp-107 baseline (best on non-retrieval categories)
+    duration_minutes: 240  # extend: 180min only 14% saturated, 855K pairs seen 0.22x; 240min should improve retrieval (weakest category)
     data: "all_curated"
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
@@ -62,7 +62,7 @@ optimizer:
   eps: 1.0e-8
   weight_decay: 0.01
   llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
-  ema_decay: 0.999  # re-enable: NaN was from attention masks not EMA; code already does mx.eval every step; swap EMA→model before save/eval
+  ema_decay: 0.0  # disabled for duration experiment; re-enable after verifying EMA separately
 
 data:
   max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)
