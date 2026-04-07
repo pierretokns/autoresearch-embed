@@ -1122,6 +1122,10 @@ def main():
     except Exception:
         pass
 
+    # Re-enable HF Hub access for eval (was disabled during training to avoid proxy errors)
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
     print("\nRunning MTEB evaluation...")
 
     eval_tasks = QUICK_TASKS if args.quick_eval_only else FULL_TASKS
