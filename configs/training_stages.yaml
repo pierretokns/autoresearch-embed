@@ -29,7 +29,7 @@ stages:
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 3.0e-5  # exp-116: lower LR for sharper temp=0.03 landscape; 5e-5 was exp-91 baseline, increases regressed (exp-93/94), decrease untested
+    learning_rate: 5.0e-5  # revert to exp-111 baseline for EMA isolation; exp-116 3e-5 untested
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # exp-91 baseline (batch=128 OOM, batch=96 regressed)
@@ -62,7 +62,7 @@ optimizer:
   eps: 1.0e-8
   weight_decay: 0.01
   llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
-  ema_decay: 0.0  # DISABLED — NaN was from attention masks not EMA, but needs mx.eval every step not every 100. Fix before re-enabling.
+  ema_decay: 0.999  # re-enable: NaN was from attention masks not EMA; code already does mx.eval every step; swap EMA→model before save/eval
 
 data:
   max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)

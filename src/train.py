@@ -1089,6 +1089,14 @@ def main():
     train_time = time.time() - train_start
     print(f"\nTotal training time: {train_time/60:.1f} min")
 
+    # Swap EMA weights into model before save/eval (EMA averages reduce noise → better generalization)
+    if ema_state is not None:
+        ema_w = ema_state["weights"]
+        original_weights = dict(tree_flatten(model.parameters()))
+        model.load_weights(list(ema_w.items()))
+        mx.eval(model.parameters())
+        print(f"[EMA] Swapped EMA weights into model (decay={ema_state['decay']})")
+
     # Save checkpoint
     ckpt_dir = Path("checkpoints") / f"exp_{time.strftime('%Y%m%d_%H%M%S')}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
