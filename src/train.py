@@ -1123,8 +1123,12 @@ def main():
         pass
 
     # Re-enable HF Hub access for eval (was disabled during training to avoid proxy errors)
+    # Must reload the constants module because HF caches env vars at import time
     os.environ.pop("HF_HUB_OFFLINE", None)
     os.environ.pop("TRANSFORMERS_OFFLINE", None)
+    import huggingface_hub.constants
+    from importlib import reload
+    reload(huggingface_hub.constants)
 
     print("\nRunning MTEB evaluation...")
 
