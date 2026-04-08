@@ -29,7 +29,7 @@ stages:
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 5.0e-5  # restore baseline LR to isolate EMA effect; exp-122 (LR=3e-5+EMA) got +6.21 cluster but -3.36 PairClass; need to determine if EMA alone helps
+    learning_rate: 3.0e-5  # exp-122 best: LR=3e-5+EMA gave primary=62.60 (+0.26), cluster +6.21; exp-123 LR=5e-5+EMA was worse at 62.20
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
@@ -45,7 +45,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 5  # exp-108 proved fine-tuning is necessary (removing it regressed SprintDup -15.26, TwitterURL -9.07)
+    duration_minutes: 15  # extended from 5: exp-122/123 EMA runs regressed PairClass -3.4/-4.3; longer FT should recover pair discrimination
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05  # revert: exp-114 showed FT temp=0.03 improved STS +2.29 but hurt retrieval -3.41; 0.05 is better overall
