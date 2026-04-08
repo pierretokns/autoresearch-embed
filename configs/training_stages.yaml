@@ -36,7 +36,7 @@ stages:
     negatives: "in_batch_plus_explicit"
     source_stratification: true
     symmetric: true  # restored: B=64 + symmetric is the proven exp-111/117 baseline
-    false_neg_threshold: 0.8  # mask in-batch pairs with cosine sim > 0.8 to reduce false negative poisoning
+    false_neg_threshold: 0.0  # revert: exp-120 regressed -2.21 (60.13 vs 62.34) with threshold=0.8, though confounded by GPU contention
 
   hard_neg_mining:
     duration_minutes: 5
@@ -62,7 +62,7 @@ optimizer:
   eps: 1.0e-8
   weight_decay: 0.01
   llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
-  ema_decay: 0.0  # disabled for duration experiment; re-enable after verifying EMA separately
+  ema_decay: 0.999  # exp-117 code fixes in place (HF offline reload + skip EMA swap on resume); expect +0.5-1.0 from weight smoothing
 
 data:
   max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)
