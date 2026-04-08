@@ -32,11 +32,11 @@ stages:
     learning_rate: 5.0e-5  # revert to exp-111 baseline for EMA isolation; exp-116 3e-5 untested
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 96  # 1.5x batch for 50% more negatives (95 vs 63); exp-94 B=96 fit at 38GB; previous regression was LR=7.5e-5 not batch size
+    batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
     negatives: "in_batch_plus_explicit"
     source_stratification: true
-    symmetric: false  # disabled for B=96: symmetric 8x slower at B=96, losing too many gradient steps; re-enable if batch drops back to 64
-    false_neg_threshold: 0.0
+    symmetric: true  # restored: B=64 + symmetric is the proven exp-111/117 baseline
+    false_neg_threshold: 0.8  # mask in-batch pairs with cosine sim > 0.8 to reduce false negative poisoning
 
   hard_neg_mining:
     duration_minutes: 5
