@@ -35,7 +35,7 @@ stages:
     batch_size: 96  # 1.5x batch for 50% more negatives (95 vs 63); exp-94 B=96 fit at 38GB; previous regression was LR=7.5e-5 not batch size
     negatives: "in_batch_plus_explicit"
     source_stratification: true
-    symmetric: true  # exp-103: bidirectional InfoNCE (query→pos + pos→query); doubles gradient signal; standard in SimCSE, E5
+    symmetric: false  # disabled for B=96: symmetric 8x slower at B=96, losing too many gradient steps; re-enable if batch drops back to 64
     false_neg_threshold: 0.0
 
   hard_neg_mining:
