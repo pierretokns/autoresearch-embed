@@ -508,7 +508,7 @@ def run_training_stage(
                                                hard_neg_weight=hard_neg_weight)
         if use_matryoshka:
             return matryoshka_infonce_loss(q_emb, p_emb, temperature=temperature)
-        if batch_size >= 128 and not symmetric and false_neg_threshold <= 0:
+        if batch_size >= 256 and not symmetric and false_neg_threshold <= 0:
             return infonce_loss_tiled(q_emb, p_emb, temperature=temperature, tile_size=64)
         return infonce_loss(q_emb, p_emb, temperature=temperature, symmetric=symmetric,
                            false_neg_threshold=false_neg_threshold)
