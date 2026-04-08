@@ -29,7 +29,7 @@ stages:
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 3.0e-5  # exp-121 showed EMA helps clustering +3.37 but was undertrained; lower LR + EMA should converge more carefully at temp=0.03
+    learning_rate: 5.0e-5  # restore baseline LR to isolate EMA effect; exp-122 (LR=3e-5+EMA) got +6.21 cluster but -3.36 PairClass; need to determine if EMA alone helps
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
