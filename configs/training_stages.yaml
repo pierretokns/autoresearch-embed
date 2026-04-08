@@ -32,7 +32,7 @@ stages:
     learning_rate: 5.0e-5  # revert to exp-111 baseline for EMA isolation; exp-116 3e-5 untested
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
-    batch_size: 128  # 2x batch for 2x in-batch negatives (127 vs 63); previous batch=128 OOM was at seq=512; at seq=256 should be ~16GB
+    batch_size: 96  # 1.5x batch for 50% more negatives (95 vs 63); exp-94 B=96 fit at 38GB; previous regression was LR=7.5e-5 not batch size
     negatives: "in_batch_plus_explicit"
     source_stratification: true
     symmetric: true  # exp-103: bidirectional InfoNCE (query→pos + pos→query); doubles gradient signal; standard in SimCSE, E5
