@@ -45,7 +45,7 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 15  # extended from 5: exp-122/123 EMA runs regressed PairClass -3.4/-4.3; longer FT should recover pair discrimination
+    duration_minutes: 5  # revert: exp-124 showed 15min FT was 99% saturated from step 50 — only +0.07 primary (62.67 vs 62.60); 5min is enough for 8K mined hard negs
     data: "all_curated_with_hard_negs"
     loss: "infonce"
     temperature: 0.05  # revert: exp-114 showed FT temp=0.03 improved STS +2.29 but hurt retrieval -3.41; 0.05 is better overall
@@ -62,7 +62,7 @@ optimizer:
   eps: 1.0e-8
   weight_decay: 0.01
   llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
-  ema_decay: 0.999  # exp-117 code fixes in place (HF offline reload + skip EMA swap on resume); expect +0.5-1.0 from weight smoothing
+  ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
   max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)
