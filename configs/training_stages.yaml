@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 180  # revert: exp-118 showed 240min overfit (-0.68 primary, retrieval -2.10); 180min is optimal
+    duration_minutes: 240  # exp-127: 200K data+180min gave primary=63.31 but retrieval -2.73 vs 100K; with 75% more data, 240min gives proportionally more steps (8300 vs 6237) to better learn retrieval; exp-118 overfit at 240min+100K but 200K should tolerate it
     data: "all_curated"
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
