@@ -442,6 +442,7 @@ def run_training_stage(
     use_matryoshka = bool(stage_cfg.get("matryoshka", False))
     use_instructions = bool(stage_cfg.get("instruction_prefix", False))
     false_neg_threshold = float(stage_cfg.get("false_neg_threshold", 0.0))
+    use_stratification = bool(stage_cfg.get("source_stratification", False))
 
     # Task-specific instruction prefixes mapped by data source
     QUERY_PREFIXES = {
@@ -493,7 +494,36 @@ def run_training_stage(
         print(f"  Temperature annealing: {temperature_start} → {temperature_end}")
 
     data = list(triplets)
-    random.shuffle(data)
+
+    # Source-stratified batching: equal representation from each source per batch
+    if use_stratification:
+        source_groups = defaultdict(list)
+        for t in data:
+            source_groups[t.get("source", "unknown")].append(t)
+        sources = sorted(source_groups.keys())
+        for s in sources:
+            random.shuffle(source_groups[s])
+        source_idx = {s: 0 for s in sources}
+        per_source = max(1, batch_size // len(sources))
+        print(f"  Source stratification: {len(sources)} sources, {per_source} per source per batch")
+
+        def next_stratified_batch():
+            batch = []
+            for s in sources:
+                group = source_groups[s]
+                idx = source_idx[s]
+                if idx >= len(group):
+                    random.shuffle(group)
+                    source_idx[s] = 0
+                    idx = 0
+                end = min(idx + per_source, len(group))
+                batch.extend(group[idx:end])
+                source_idx[s] = end
+            random.shuffle(batch)  # shuffle within batch to prevent position bias
+            return batch[:batch_size]
+    else:
+        random.shuffle(data)
+
     mx.clear_cache()  # Consolidate Metal memory after shuffle
 
     def loss_fn(model, q_ids, q_mask, p_ids, p_mask, n_ids=None, n_mask=None):
@@ -516,10 +546,17 @@ def run_training_stage(
     loss_grad_fn = nn.value_and_grad(model, loss_fn)
 
     while time.time() - stage_start < duration_s:
-        for batch_start in range(0, len(data), batch_size):
+        if use_stratification:
+            batch_iter = [None]  # single iteration; batch built by next_stratified_batch()
+        else:
+            batch_iter = range(0, len(data), batch_size)
+        for batch_start in batch_iter:
             if time.time() - stage_start >= duration_s:
                 break
-            batch = data[batch_start:batch_start + batch_size]
+            if use_stratification:
+                batch = next_stratified_batch()
+            else:
+                batch = data[batch_start:batch_start + batch_size]
             if len(batch) < 2:
                 continue
 
@@ -629,7 +666,8 @@ def run_training_stage(
                     status = "SATURATED" if src_sat > 60 else "healthy"
                     print(f"    {src:45s} avg={src_avg:.3f} sat={src_sat:.0f}% [{status}]", flush=True)
 
-        random.shuffle(data)
+        if not use_stratification:
+            random.shuffle(data)
         mx.clear_cache()  # Consolidate Metal memory after shuffle
 
     stage_time = time.time() - stage_start
