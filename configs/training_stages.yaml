@@ -29,7 +29,7 @@ stages:
     loss: "infonce"
     temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 2.0e-5  # exp-125: LR=3e-5 no-EMA set new best 63.10 (+0.76 over baseline); trying even lower LR for more stability; 5e-5→3e-5 was +0.76, hoping 3e-5→2e-5 gives further gain
+    learning_rate: 3.0e-5  # exp-125 best: LR=3e-5 no-EMA primary=63.10; exp-126 LR=2e-5 regressed to 62.79 (PairClass -1.21, cluster -1.31); 3e-5 is the sweet spot
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
@@ -65,7 +65,7 @@ optimizer:
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
-  max_rows_per_dataset: 100000  # revert to exp-104 baseline (200K caused STS/PairClass regression in exp-105/106 via signal dilution)
+  max_rows_per_dataset: 200000  # exp-127: scale up from 100K; exp-105/106 showed 200K regressed at LR=5e-5 but now with LR=3e-5 the model can handle more data without signal dilution; more unique pairs should improve retrieval (48.44) and clustering (41.60)
 
 memory:
   max_peak_gb: 55
