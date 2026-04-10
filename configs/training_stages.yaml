@@ -27,9 +27,9 @@ stages:
     duration_minutes: 240  # exp-127: 200K data+180min gave primary=63.31 but retrieval -2.73 vs 100K; with 75% more data, 240min gives proportionally more steps (8300 vs 6237) to better learn retrieval; exp-118 overfit at 240min+100K but 200K should tolerate it
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05  # exp-131: revert to 0.05; exp-107 (temp=0.05) actual best at 65.16 vs exp-128 (temp=0.03) at 63.53; temp=0.03 improved STS/PairClass but hurt Classification+Clustering+Reranking+Retrieval by -2.86 avg
+    temperature: 0.05  # exp-132: temp=0.05+LR=5e-5 was best combo (exp-107=65.16); exp-131 showed temp=0.05+LR=3e-5 is catastrophic (56.71); must use LR=5e-5 with temp=0.05
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 3.0e-5  # exp-125 best: LR=3e-5 no-EMA primary=63.10; exp-126 LR=2e-5 regressed to 62.79 (PairClass -1.21, cluster -1.31); 3e-5 is the sweet spot
+    learning_rate: 5.0e-5  # exp-132: restore LR=5e-5 for temp=0.05 (exp-107 best=65.16 used this combo); LR=3e-5 was optimal only for temp=0.03; exp-131 proved LR=3e-5+temp=0.05 catastrophic (56.71)
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
