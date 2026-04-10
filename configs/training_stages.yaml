@@ -24,12 +24,12 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 240  # exp-127: 200K data+180min gave primary=63.31 but retrieval -2.73 vs 100K; with 75% more data, 240min gives proportionally more steps (8300 vs 6237) to better learn retrieval; exp-118 overfit at 240min+100K but 200K should tolerate it
+    duration_minutes: 180  # revert to exp-107 proven recipe; exp-118 showed 240min overfit at 100K data
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.03  # revert: temp=0.05 regressed at both LR=3e-5 (56.71) and LR=5e-5+200K (57.94); temp=0.03+LR=3e-5 is best proven combo at 200K data (63.53)
+    temperature: 0.05  # revert to exp-107 recipe (65.16); temp=0.03 only works with LR=3e-5+200K; temp=0.05+LR=5e-5+100K is global best
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 3.0e-5  # exp-125/128 best at temp=0.03; LR=5e-5 only works with temp=0.05+100K (exp-107)
+    learning_rate: 5.0e-5  # revert to exp-107 recipe; LR=5e-5 pairs with temp=0.05+100K
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
@@ -60,12 +60,12 @@ optimizer:
   type: "adamw"
   betas: [0.9, 0.999]
   eps: 1.0e-8
-  weight_decay: 0.03  # exp-133: increase from 0.01; stronger regularization may improve generalization; 0.01 is standard but undertested — many embedding models use 0.01-0.1
-  llrd_decay: 1.0  # disabled (exp-92: 0.95 caused catastrophic underfitting, 39.21 primary)
+  weight_decay: 0.01  # revert: exp-133 showed 0.03 regressed -4.96 (58.57 vs 63.53); PairClass collapsed (SprintDup -18.86); 0.01 is optimal
+  llrd_decay: 0.99  # exp-134: gentle LLRD; exp-92 used 0.95 (catastrophic, 39.21) but 0.99 is much milder — bottom layer gets 0.81x LR vs 0.34x; preserves lower-layer features while adapting upper layers more
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
-  max_rows_per_dataset: 200000  # exp-127: scale up from 100K; exp-105/106 showed 200K regressed at LR=5e-5 but now with LR=3e-5 the model can handle more data without signal dilution; more unique pairs should improve retrieval (48.44) and clustering (41.60)
+  max_rows_per_dataset: 100000  # revert to exp-107 recipe; 200K only helps at temp=0.03+LR=3e-5 (exp-127); at temp=0.05+LR=5e-5, 200K regressed -7.22 (exp-132: 57.94 vs exp-107: 65.16)
 
 memory:
   max_peak_gb: 55
