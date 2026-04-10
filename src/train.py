@@ -156,8 +156,8 @@ def infonce_loss_with_hard_negs(
     hard neg repulsion (2.0 destroyed the model in exp-70 — too aggressive)."""
     B = query_emb.shape[0]
     sim_inbatch = mx.matmul(query_emb, positive_emb.T) / temperature
-    # Hard neg similarity at natural scale (weight=1.0 means no amplification)
-    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
+    # Hard neg similarity scaled by weight (1.0 = natural scale, <1 = softer repulsion)
+    sim_hardneg = hard_neg_weight * mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
     logits = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
     labels = mx.arange(B)
     log_softmax = logits - mx.logsumexp(logits, axis=1, keepdims=True)
@@ -1090,8 +1090,20 @@ def main():
     elif triplets:
         if resume_stage == "mining":
             load_stage_checkpoint("contrastive")
-        # Use subset for mining to avoid OOM on 64GB system
-        mining_triplets = triplets[:8000]
+        # Source-diverse mining pool: equal samples from each source for domain coverage
+        # exp-129 FT was 99% saturated because 8K triplets[:8000] was dominated by large sources
+        from collections import defaultdict
+        _mining_groups = defaultdict(list)
+        for _t in triplets:
+            _mining_groups[_t.get("source", "unknown")].append(_t)
+        _per_source = max(500, 20000 // max(len(_mining_groups), 1))
+        mining_triplets = []
+        for _src in sorted(_mining_groups.keys()):
+            _pool = _mining_groups[_src]
+            random.shuffle(_pool)
+            mining_triplets.extend(_pool[:_per_source])
+        random.shuffle(mining_triplets)
+        print(f"  Mining pool: {len(mining_triplets)} triplets from {len(_mining_groups)} sources ({_per_source}/source)")
         mining_bs = int(mining_cfg.get("batch_size", 32))
         triplets_with_negs = mine_hard_negatives(
             model, tokenizer, mining_triplets,
