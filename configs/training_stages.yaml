@@ -61,7 +61,7 @@ optimizer:
   betas: [0.9, 0.999]
   eps: 1.0e-8
   weight_decay: 0.01  # revert: exp-133 showed 0.03 regressed -4.96 (58.57 vs 63.53); PairClass collapsed (SprintDup -18.86); 0.01 is optimal
-  llrd_decay: 0.99  # exp-134: gentle LLRD; exp-92 used 0.95 (catastrophic, 39.21) but 0.99 is much milder — bottom layer gets 0.81x LR vs 0.34x; preserves lower-layer features while adapting upper layers more
+  llrd_decay: 1.0  # disabled: LLRD catastrophic at ANY decay — exp-92 (0.95)=39.21, exp-134 (0.99)=48.16; contrastive learning needs full gradient at all layers
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
