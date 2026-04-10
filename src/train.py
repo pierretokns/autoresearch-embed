@@ -156,8 +156,8 @@ def infonce_loss_with_hard_negs(
     hard neg repulsion (2.0 destroyed the model in exp-70 — too aggressive)."""
     B = query_emb.shape[0]
     sim_inbatch = mx.matmul(query_emb, positive_emb.T) / temperature
-    # Hard neg similarity scaled by weight (1.0 = natural scale, <1 = softer repulsion)
-    sim_hardneg = hard_neg_weight * mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
+    # Hard neg similarity (weight scaling disabled: exp-130 showed weight=0.5 catastrophic -4.63)
+    sim_hardneg = mx.sum(query_emb * hard_neg_emb, axis=-1, keepdims=True) / temperature
     logits = mx.concatenate([sim_inbatch, sim_hardneg], axis=1)
     labels = mx.arange(B)
     log_softmax = logits - mx.logsumexp(logits, axis=1, keepdims=True)

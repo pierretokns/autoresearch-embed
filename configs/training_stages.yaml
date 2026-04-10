@@ -27,7 +27,7 @@ stages:
     duration_minutes: 240  # exp-127: 200K data+180min gave primary=63.31 but retrieval -2.73 vs 100K; with 75% more data, 240min gives proportionally more steps (8300 vs 6237) to better learn retrieval; exp-118 overfit at 240min+100K but 200K should tolerate it
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.03  # exp-111 sweet spot: 0.03 beat 0.05 (+3.53 retrieval) and 0.02 regressed (-1.33 retrieval in exp-112)
+    temperature: 0.05  # exp-131: revert to 0.05; exp-107 (temp=0.05) actual best at 65.16 vs exp-128 (temp=0.03) at 63.53; temp=0.03 improved STS/PairClass but hurt Classification+Clustering+Reranking+Retrieval by -2.86 avg
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
     learning_rate: 3.0e-5  # exp-125 best: LR=3e-5 no-EMA primary=63.10; exp-126 LR=2e-5 regressed to 62.79 (PairClass -1.21, cluster -1.31); 3e-5 is the sweet spot
     lr_schedule: "cosine_decay"
@@ -53,7 +53,7 @@ stages:
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
     batch_size: 64
-    hard_neg_weight: 0.5  # exp-130: enable hard negs with actual weight scaling (loss now multiplies sim by weight); exp-102 weight=1.0 caused catastrophic forgetting (-3.19); 0.5 = softer repulsion; source-diverse mining pool provides balanced hard negs
+    hard_neg_weight: 0.0  # exp-130: weight=0.5 caused catastrophic forgetting (-4.63 primary, PairClass -12.47); exp-102: weight=1.0 also regressed -3.19; hard negs in FT are toxic at any weight — the FT stage is effectively just continuation of contrastive at different hyperparams
     false_neg_threshold: 0.0
 
 optimizer:
