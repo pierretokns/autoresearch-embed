@@ -24,17 +24,17 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 180  # revert to exp-107 proven recipe; exp-118 showed 240min overfit at 100K data
+    duration_minutes: 240  # exp-128 best recipe: 240min+200K+temp=0.03+LR=3e-5 = 63.53
     data: "all_curated"
     loss: "infonce"
-    temperature: 0.05  # revert to exp-107 recipe (65.16); temp=0.03 only works with LR=3e-5+200K; temp=0.05+LR=5e-5+100K is global best
+    temperature: 0.03  # exp-128 recipe; temp=0.03+LR=3e-5 is genuinely superior to temp=0.05+LR=5e-5 (63.53 vs ~58)
     temperature_end: 0.0  # disabled (exp-104: 0.07→0.03 annealing was essentially flat)
-    learning_rate: 5.0e-5  # revert to exp-107 recipe; LR=5e-5 pairs with temp=0.05+100K
+    learning_rate: 3.0e-5  # exp-128 recipe; LR=3e-5 pairs with temp=0.03
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
     negatives: "in_batch_plus_explicit"
-    source_stratification: true  # exp-135: disabling stratification regressed -4.31 (57.98 vs 62.29); exp-107 best had it ON; exp-129 regression was at temp=0.03 recipe, not temp=0.05
+    source_stratification: false  # exp-136 showed strat=true hurts at temp=0.05 too (-0.69); exp-107 never used strat (dead code); exp-129 showed -0.59 at temp=0.03
     symmetric: true  # restored: B=64 + symmetric is the proven exp-111/117 baseline
     false_neg_threshold: 0.0  # revert: exp-120 regressed -2.21 (60.13 vs 62.34) with threshold=0.8, though confounded by GPU contention
 
@@ -65,7 +65,8 @@ optimizer:
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
-  max_rows_per_dataset: 100000  # revert to exp-107 recipe; 200K only helps at temp=0.03+LR=3e-5 (exp-127); at temp=0.05+LR=5e-5, 200K regressed -7.22 (exp-132: 57.94 vs exp-107: 65.16)
+  max_rows_per_dataset: 200000  # exp-128 recipe: 200K+temp=0.03+LR=3e-5+240min = 63.53 (best)
+  cross_dedup: true  # NEW: MinHash cross-dataset deduplication (threshold=0.8); removes near-duplicate pairs across sources
 
 memory:
   max_peak_gb: 55

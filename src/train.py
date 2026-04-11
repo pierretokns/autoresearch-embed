@@ -420,6 +420,44 @@ def load_training_data(datasets_to_load: list[str], max_rows_per_dataset: int = 
     return all_triplets
 
 
+def dedup_triplets_minhash(triplets: list[dict], threshold: float = 0.8) -> tuple[list[dict], int]:
+    """Remove near-duplicate triplets across datasets using MinHash LSH.
+
+    Uses query+positive text as the fingerprint. Keeps the first occurrence.
+    Returns (deduped_triplets, removed_count).
+    """
+    from datasketch import MinHash, MinHashLSH
+
+    NUM_PERM = 128
+    lsh = MinHashLSH(threshold=threshold, num_perm=NUM_PERM)
+    keep = []
+    removed = 0
+
+    for i, triplet in enumerate(triplets):
+        text = (triplet.get("query", "") + " " + triplet.get("positive", "")).lower().strip()
+        if len(text) < 20:
+            keep.append(triplet)
+            continue
+
+        m = MinHash(num_perm=NUM_PERM)
+        for j in range(len(text) - 4):
+            m.update(text[j:j+5].encode("utf-8"))
+
+        if lsh.query(m):
+            removed += 1
+        else:
+            try:
+                lsh.insert(f"t_{i}", m)
+            except ValueError:
+                pass  # exact duplicate hash
+            keep.append(triplet)
+
+        if (i + 1) % 100000 == 0:
+            print(f"  [dedup] Processed {i+1}/{len(triplets)}, removed {removed} so far")
+
+    return keep, removed
+
+
 # ---- Training Stage (MLX) ----
 
 def run_training_stage(
@@ -955,7 +993,9 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     max_rows = int(config.get("data", {}).get("max_rows_per_dataset", 30000))
-    ds_key = hashlib.sha256(json.dumps({"datasets": DATASETS, "max_rows": max_rows}, sort_keys=True).encode()).hexdigest()[:12]
+    cross_dedup = config.get("data", {}).get("cross_dedup", False)
+    ds_key_data = {"datasets": DATASETS, "max_rows": max_rows, "cross_dedup": cross_dedup}
+    ds_key = hashlib.sha256(json.dumps(ds_key_data, sort_keys=True).encode()).hexdigest()[:12]
     cache_path = Path("data_cache") / f"clean_triplets_{ds_key}.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -963,7 +1003,7 @@ def main():
         print(f"Loading cached clean triplets from {cache_path}...")
         triplets = json.loads(cache_path.read_text())
         removed = 0
-        print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated).")
+        print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated{'+deduped' if cross_dedup else ''}).")
     else:
         print("Loading training data...")
         triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
@@ -974,6 +1014,11 @@ def main():
         test_lsh = build_test_lsh(DECONTAM_TASKS)
         triplets, removed = filter_triplets(triplets, test_lsh)
         print(f"Decontamination removed {removed} samples. Clean pairs: {len(triplets)}")
+
+        if cross_dedup:
+            print("Running cross-dataset MinHash deduplication...")
+            triplets, dedup_removed = dedup_triplets_minhash(triplets, threshold=0.8)
+            print(f"Dedup removed {dedup_removed} near-duplicate pairs. Clean pairs: {len(triplets)}")
 
         cache_path.write_text(json.dumps(triplets))
         print(f"Cached clean triplets to {cache_path}")
