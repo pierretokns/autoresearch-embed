@@ -66,7 +66,7 @@ optimizer:
 
 data:
   max_rows_per_dataset: 200000  # exp-128 recipe: 200K+temp=0.03+LR=3e-5+240min = 63.53 (best)
-  cross_dedup: true  # NEW: MinHash cross-dataset deduplication (threshold=0.8); removes near-duplicate pairs across sources
+  cross_dedup: false  # exp-137: dedup removed 48K pairs (3.2%) but primary collapsed to 54.0 (-9.5); testing without dedup to isolate code drift vs dedup effect
 
 memory:
   max_peak_gb: 55
