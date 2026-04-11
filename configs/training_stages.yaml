@@ -65,7 +65,7 @@ optimizer:
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
-  max_rows_per_dataset: 200000  # exp-128 recipe: 200K+temp=0.03+LR=3e-5+240min = 63.53 (best)
+  max_rows_per_dataset: 400000  # exp-140: test 400K scaling; exp-128/139 showed 200K=63.53/62.86; program.md says data scaling is highest ROI
   cross_dedup: false  # exp-137: dedup removed 48K pairs (3.2%) but primary collapsed to 54.0 (-9.5); testing without dedup to isolate code drift vs dedup effect
 
 memory:
