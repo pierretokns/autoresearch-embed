@@ -1023,8 +1023,12 @@ def main():
             triplets, dedup_removed = dedup_triplets_minhash(triplets, threshold=0.8)
             print(f"Dedup removed {dedup_removed} near-duplicate pairs. Clean pairs: {len(triplets)}")
 
-        cache_path.write_text(json.dumps(triplets))
-        print(f"Cached clean triplets to {cache_path}")
+        # Only cache if we actually got data (prevent poisoning cache with empty results)
+        if triplets:
+            cache_path.write_text(json.dumps(triplets))
+            print(f"Cached clean triplets to {cache_path}")
+        else:
+            print("WARNING: No triplets loaded — skipping cache write to avoid poisoning")
         # Restore offline mode for training stability
         if _saved_hf_offline is not None:
             os.environ["HF_HUB_OFFLINE"] = _saved_hf_offline
@@ -1032,8 +1036,8 @@ def main():
             os.environ["TRANSFORMERS_OFFLINE"] = _saved_tf_offline
 
     if not triplets:
-        print("WARNING: No training data loaded.")
-        triplets = []
+        print("ERROR: No training data loaded. Aborting.")
+        sys.exit(1)
 
     stages = config.get("stages", {})
     resume_stage = args.resume_stage
