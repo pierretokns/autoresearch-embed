@@ -1005,6 +1005,9 @@ def main():
         removed = 0
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated{'+deduped' if cross_dedup else ''}).")
     else:
+        # Temporarily allow network access for data download (offline mode blocks fresh downloads)
+        _saved_hf_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+        _saved_tf_offline = os.environ.pop("TRANSFORMERS_OFFLINE", None)
         print("Loading training data...")
         triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
@@ -1022,6 +1025,11 @@ def main():
 
         cache_path.write_text(json.dumps(triplets))
         print(f"Cached clean triplets to {cache_path}")
+        # Restore offline mode for training stability
+        if _saved_hf_offline is not None:
+            os.environ["HF_HUB_OFFLINE"] = _saved_hf_offline
+        if _saved_tf_offline is not None:
+            os.environ["TRANSFORMERS_OFFLINE"] = _saved_tf_offline
 
     if not triplets:
         print("WARNING: No training data loaded.")
