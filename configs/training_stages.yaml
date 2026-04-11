@@ -34,7 +34,7 @@ stages:
     warmup_ratio: 0.05
     batch_size: 64  # revert: B=96 is 8x slower per step (29s vs 3.6s); likely Metal memory thrashing; B=64 gives 3000 steps/180min
     negatives: "in_batch_plus_explicit"
-    source_stratification: false  # exp-129: stratification regressed -0.59 (62.94 vs 63.53); equal weighting hurt PairClass -1.04 and Classification -1.68 while retrieval barely changed (+0.12); dominant paraphrase sources need MORE exposure, not less
+    source_stratification: true  # exp-135: disabling stratification regressed -4.31 (57.98 vs 62.29); exp-107 best had it ON; exp-129 regression was at temp=0.03 recipe, not temp=0.05
     symmetric: true  # restored: B=64 + symmetric is the proven exp-111/117 baseline
     false_neg_threshold: 0.0  # revert: exp-120 regressed -2.21 (60.13 vs 62.34) with threshold=0.8, though confounded by GPU contention
 
