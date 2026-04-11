@@ -167,9 +167,6 @@ def infonce_loss_with_hard_negs(
 # ---- Data Loading ----
 # Enable fast multi-connection HF downloads (Rust-based, ~5-10x faster)
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-# Use cached HF artifacts when network is unavailable (proxy errors, offline)
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 def _cache_path(ds_id: str, config: str | None, fmt: str, max_rows: int) -> Path:
     """Return path to cached triplets JSON for a dataset spec."""
@@ -1005,9 +1002,6 @@ def main():
         removed = 0
         print(f"Loaded {len(triplets)} clean pairs from cache (decontaminated{'+deduped' if cross_dedup else ''}).")
     else:
-        # Temporarily allow network access for data download (offline mode blocks fresh downloads)
-        _saved_hf_offline = os.environ.pop("HF_HUB_OFFLINE", None)
-        _saved_tf_offline = os.environ.pop("TRANSFORMERS_OFFLINE", None)
         print("Loading training data...")
         triplets = load_training_data(DATASETS, max_rows_per_dataset=max_rows)
         print(f"Total training pairs (pre-decontam): {len(triplets)}")
@@ -1029,11 +1023,6 @@ def main():
             print(f"Cached clean triplets to {cache_path}")
         else:
             print("WARNING: No triplets loaded — skipping cache write to avoid poisoning")
-        # Restore offline mode for training stability
-        if _saved_hf_offline is not None:
-            os.environ["HF_HUB_OFFLINE"] = _saved_hf_offline
-        if _saved_tf_offline is not None:
-            os.environ["TRANSFORMERS_OFFLINE"] = _saved_tf_offline
 
     if not triplets:
         print("ERROR: No training data loaded. Aborting.")
@@ -1217,13 +1206,6 @@ def main():
     except Exception:
         pass
 
-    # Re-enable HF Hub access for eval (was disabled during training to avoid proxy errors)
-    # Must reload the constants module because HF caches env vars at import time
-    os.environ.pop("HF_HUB_OFFLINE", None)
-    os.environ.pop("TRANSFORMERS_OFFLINE", None)
-    import huggingface_hub.constants
-    from importlib import reload
-    reload(huggingface_hub.constants)
 
     print("\nRunning MTEB evaluation...")
 
