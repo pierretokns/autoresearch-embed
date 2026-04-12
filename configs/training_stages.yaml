@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 360  # exp-145: test 360min (50% longer); exp-143/144 showed low saturation (16-24%) at 240min end — model may benefit from more training
+    duration_minutes: 480  # exp-146: test 480min (2x baseline); exp-145 showed 360min=63.44 (+0.58 vs 240min=62.86), still only 32% saturated at end — more training may close gap to exp-128's 63.53
     data: "all_curated"
     loss: "infonce"
     temperature: 0.03  # exp-128 recipe; temp=0.03+LR=3e-5 is genuinely superior to temp=0.05+LR=5e-5 (63.53 vs ~58)
