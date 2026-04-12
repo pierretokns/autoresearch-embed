@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "latent_attn"  # exp-144: test latent attention pooling (NV-Embed-v2 uses this); CLS baseline=62.86
+pooling: "cls"  # exp-144: latent_attn was flat (+0.13); retrieval +2.10 but STS -1.05; CLS is baseline
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -24,7 +24,7 @@ stages:
     false_neg_threshold: 0.0  # disabled for warmup (paraphrase data is clean)
 
   contrastive:
-    duration_minutes: 240  # exp-128 best recipe: 240min+200K+temp=0.03+LR=3e-5 = 63.53
+    duration_minutes: 360  # exp-145: test 360min (50% longer); exp-143/144 showed low saturation (16-24%) at 240min end — model may benefit from more training
     data: "all_curated"
     loss: "infonce"
     temperature: 0.03  # exp-128 recipe; temp=0.03+LR=3e-5 is genuinely superior to temp=0.05+LR=5e-5 (63.53 vs ~58)
