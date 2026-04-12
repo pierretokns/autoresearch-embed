@@ -4,7 +4,7 @@
 base_model: "answerdotai/ModernBERT-base"
 # embedding_dim is determined by the base model (768 for base, 1024 for large)
 projection_dim: 768
-pooling: "cls"  # exp-109: mean pooling was flat/-0.42 on 21-task eval; CLS is our baseline
+pooling: "latent_attn"  # exp-144: test latent attention pooling (NV-Embed-v2 uses this); CLS baseline=62.86
 max_seq_length: 256  # revert to working value; seq_len=512 regressed in exp-74
 normalize_embeddings: true
 simclr_head: false  # exp-77: SimCLR head regressed (52.88 vs 57.51)
@@ -65,7 +65,7 @@ optimizer:
   ema_decay: 0.0  # disabled: exp-122/124 showed EMA improves clustering +4-6 but regresses PairClass -2 to -3; testing LR=3e-5 alone to see if lower LR is the actual driver
 
 data:
-  max_rows_per_dataset: 400000  # exp-140: test 400K scaling; exp-128/139 showed 200K=63.53/62.86; program.md says data scaling is highest ROI
+  max_rows_per_dataset: 200000  # exp-143: 400K=62.77, same as 200K=62.86; not data-limited
   cross_dedup: false  # exp-137: dedup removed 48K pairs (3.2%) but primary collapsed to 54.0 (-9.5); testing without dedup to isolate code drift vs dedup effect
 
 memory:
