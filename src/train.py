@@ -494,6 +494,7 @@ def run_training_stage(
     }
     lr_schedule = stage_cfg.get("lr_schedule", "constant")
     base_lr = float(stage_cfg.get("learning_rate", 5e-5))
+    min_lr = float(stage_cfg.get("learning_rate_min", 0.0))
     warmup_ratio = float(stage_cfg.get("warmup_ratio", 0.0))
     warmup_s = duration_s * warmup_ratio  # warmup in seconds
 
@@ -503,7 +504,8 @@ def run_training_stage(
             if elapsed_s < warmup_s and warmup_s > 0:
                 return base_lr * elapsed_s / warmup_s
             progress = (elapsed_s - warmup_s) / max(1.0, duration_s - warmup_s)
-            return base_lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+            cosine_lr = base_lr * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+            return max(cosine_lr, min_lr)
         elif lr_schedule == "linear_warmup_constant":
             if elapsed_s < warmup_s and warmup_s > 0:
                 return base_lr * elapsed_s / warmup_s
