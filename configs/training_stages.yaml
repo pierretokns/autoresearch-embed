@@ -46,10 +46,10 @@ stages:
     min_similarity: 0.3
 
   fine_tuning:
-    duration_minutes: 0  # exp-149: skip FT entirely — with hard_neg_weight=0.0 it's just contrastive at worse hyperparams (temp=0.05 vs optimal 0.03); may be hurting by shifting model away from optimal temp
+    duration_minutes: 60  # exp-149: skip FT regressed -4.23 (59.46 vs 63.69); FT consolidation phase is essential; restore to 60min baseline
     data: "all_curated_with_hard_negs"
     loss: "infonce"
-    temperature: 0.05  # revert: exp-114 showed FT temp=0.03 improved STS +2.29 but hurt retrieval -3.41; 0.05 is better overall
+    temperature: 0.03  # exp-150: match contrastive temp; exp-114 showed FT temp=0.03 hurt retrieval but that was weaker baseline; 480min contrastive foundation may handle it
     learning_rate: 1.0e-5
     lr_schedule: "cosine_decay"
     warmup_ratio: 0.0
